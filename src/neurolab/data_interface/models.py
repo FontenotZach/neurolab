@@ -20,6 +20,17 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
+"""
+DataSourceSpec defines the parameters for discovering artifacts from a data source.
+- uri: The URI of the data source (e.g., file path, database connection string).
+- source_type: The type of data source (currently only "filesystem" is supported).
+- include_globs: Optional list of glob patterns to include (e.g., ["*.csv"]).
+- exclude_globs: Optional list of glob patterns to exclude (e.g., ["*.tmp"]).
+- recursive: Whether to search directories recursively (default: True).
+- hints: Optional dictionary for additional discovery hints (e.g., {"follow_symlinks": True}).
+"""
+
+
 @dataclass(frozen=True)
 class DataSourceSpec:
     uri: str
@@ -28,6 +39,8 @@ class DataSourceSpec:
     exclude_globs: list[str] | None = None
     recursive: bool = True
     hints: dict[str, Any] = field(default_factory=dict)
+
+    """to_dict serializes the DataSourceSpec instance to a dictionary."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -38,6 +51,8 @@ class DataSourceSpec:
             "recursive": self.recursive,
             "hints": self.hints,
         }
+
+    """from_dict validates the input dictionary and constructs a DataSourceSpec instance."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DataSourceSpec:
@@ -60,6 +75,21 @@ class DataSourceSpec:
         )
 
 
+"""
+Artifact represents a discovered artifact from a data source.
+- source_uri: The original URI where the artifact was discovered.
+- artifact_type: The type of artifact (e.g., "file", "db_table").
+- relative_path: The path of the artifact relative to the data source root (if applicable).
+- absolute_path: The absolute path of the artifact (if applicable).
+- size_bytes: The size of the artifact in bytes (if applicable).
+- mtime: The last modified time of the artifact (if applicable).
+- content_hash: A hash of the artifact's content for change detection (if applicable).
+- media_type: The media type of the artifact (e.g., "text/csv", "application/json") (if applicable).
+- artifact_id: A unique identifier for the artifact (defaults to a UUID).
+- tags: Optional dictionary of tags for additional metadata.
+"""
+
+
 @dataclass(frozen=True)
 class Artifact:
     source_uri: str
@@ -74,6 +104,8 @@ class Artifact:
     artifact_id: str = field(default_factory=lambda: str(uuid4()))
     tags: dict[str, str] = field(default_factory=dict)
 
+    """to_dict serializes the Artifact instance to a dictionary."""
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "artifact_id": self.artifact_id,
@@ -87,6 +119,8 @@ class Artifact:
             "media_type": self.media_type,
             "tags": self.tags,
         }
+
+    """from_dict validates the input dictionary and constructs an Artifact instance."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Artifact:
@@ -122,6 +156,16 @@ class Artifact:
         )
 
 
+"""
+Manifest represents the result of an artifact discovery process.
+- manifest_id: A unique identifier for the manifest (defaults to a UUID).
+- source: The DataSourceSpec that was used for discovery.
+- created_at: The timestamp when the manifest was created (in UTC).
+- artifacts: A list of discovered Artifact instances.
+- warnings: Optional list of warning messages encountered during discovery.
+"""
+
+
 @dataclass(frozen=True)
 class Manifest:
     manifest_id: str
@@ -130,9 +174,13 @@ class Manifest:
     artifacts: list[Artifact]
     warnings: list[str] = field(default_factory=list)
 
+    """artifact_count returns the number of artifacts in the manifest."""
+
     @property
     def artifact_count(self) -> int:
         return len(self.artifacts)
+
+    """to_dict serializes the Manifest instance to a dictionary."""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -142,6 +190,8 @@ class Manifest:
             "artifacts": [artifact.to_dict() for artifact in self.artifacts],
             "warnings": self.warnings,
         }
+
+    """from_dict validates the input dictionary and constructs a Manifest instance."""
 
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Manifest:
