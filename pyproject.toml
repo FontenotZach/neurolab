@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-neurolab = "neurolab.cli:main"
+neurolab = "neurolab.interfaces.cli:app"
 
 [tool.uv]
 package = true
@@ -32,3 +32,5 @@ ignore = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+
