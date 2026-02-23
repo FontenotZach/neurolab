@@ -37,6 +37,7 @@ class DataSourceSpec:
     source_type: Literal["filesystem"] = "filesystem"
     include_globs: list[str] | None = None
     exclude_globs: list[str] | None = None
+    compute_hash: bool = True
     recursive: bool = True
     hints: dict[str, Any] = field(default_factory=dict)
 
@@ -100,6 +101,11 @@ class Artifact:
     mtime: datetime | None
     content_hash: str | None
     media_type: str | None
+
+    # TODO: Diff identity currently uses `relative_path` for filesystem artifacts.
+    # When adding non-filesystem collectors (e.g., database, API, S3),
+    # introduce a generalized `identity_key` field or method so diffing
+    # does not depend on filesystem-specific structure.
 
     artifact_id: str = field(default_factory=lambda: str(uuid4()))
     tags: dict[str, str] = field(default_factory=dict)

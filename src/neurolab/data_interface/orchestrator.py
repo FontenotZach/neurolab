@@ -12,11 +12,9 @@ Orchestrator for collecting artifacts from various data sources.
 """
 
 
-def collect_source(source: DataSourceSpec, *, compute_hash: bool = False) -> Manifest:
-    # Implement collection logic based on source_type.
-    # Currently only "filesystem" is supported
+def collect_source(source: DataSourceSpec) -> Manifest:
     if source.source_type == "filesystem":
-        collector = FilesystemCollector(compute_hash=compute_hash)
+        collector = FilesystemCollector(compute_hash=source.compute_hash)
         return collector.collect(source)
 
     raise ValueError(f"No collector registered for source_type={source.source_type}")
