@@ -109,7 +109,7 @@ FilesystemCollector is a simple implementation of ArtifactCollector that collect
     file, it gathers metadata such as size, mtime, content hash (optional), and media type 
     (inferred from extension). Any warnings encountered during collection are included in 
     the resulting Manifest.
-- compute_hash: Whether to compute a content hash for each file (default: False).
+- compute_hash: Whether to compute a content hash for each file (default: True).
 - source.uri: The filesystem path to collect from (can be a file or directory).
 - source.include_globs: Optional list of glob patterns to include (e.g., ["**/*.csv"]).
 - source.exclude_globs: Optional list of glob patterns to exclude (e.g., ["**/__pycache__/**"]).
@@ -120,8 +120,6 @@ FilesystemCollector is a simple implementation of ArtifactCollector that collect
 
 @dataclass
 class FilesystemCollector:
-    compute_hash: bool = False
-
     def collect(self, source: DataSourceSpec) -> Manifest:
         if source.source_type != "filesystem":
             raise ValueError(f"FilesystemCollector cannot handle source_type={source.source_type}")
@@ -146,7 +144,7 @@ class FilesystemCollector:
                 return
 
             content_hash: str | None = None
-            if self.compute_hash:
+            if source.compute_hash:
                 try:
                     content_hash = hash_file_sha256(p)
                 except Exception as e:
@@ -204,6 +202,8 @@ class FilesystemCollector:
 
         else:
             warnings.append(f"source uri does not exist or is not accessible: {root}")
+
+        artifacts.sort(key=lambda a: a.relative_path or "")
 
         return Manifest(
             manifest_id=str(uuid4()),

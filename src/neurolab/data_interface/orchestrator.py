@@ -14,7 +14,7 @@ Orchestrator for collecting artifacts from various data sources.
 
 def collect_source(source: DataSourceSpec) -> Manifest:
     if source.source_type == "filesystem":
-        collector = FilesystemCollector(compute_hash=source.compute_hash)
+        collector = FilesystemCollector()
         return collector.collect(source)
 
     raise ValueError(f"No collector registered for source_type={source.source_type}")
