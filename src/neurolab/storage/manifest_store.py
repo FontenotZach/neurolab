@@ -42,3 +42,9 @@ class FileManifestStore:
 
     def list(self) -> list[str]:
         return [p.stem for p in self.base_dir.glob("*.json") if p.is_file()]
+
+    def delete(self, manifest_id: str) -> None:
+        path = self._path(manifest_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Manifest {manifest_id} not found")
+        path.unlink()
