@@ -1,10 +1,10 @@
-# Neurolab
+# Neurolab (name to change)
 
 **Deterministic Research Data Engine**
 
 - **Author:** Zach Fontenot  
-- **Status:** Early Development (v0.x)  
-- **License:** Planned Open Source  
+- **Status:** Early Development (v0.1)  
+- **License:** Apache 2.0
 
 ---
 
