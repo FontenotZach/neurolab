@@ -32,5 +32,10 @@ ignore = []
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-
-
+markers = [
+    "unit: unit tests (fast, isolated).",
+    "integration: integration tests (may use filesystem, external data).",
+    "data_interface: tests for the data_interface layer (models, hashing, collectors, orchestrator).",
+    "storage: tests for the storage layer (manifest store).",
+    "interfaces: tests for the interfaces layer (CLI).",
+]

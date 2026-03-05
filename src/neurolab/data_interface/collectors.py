@@ -6,22 +6,17 @@ from pathlib import Path
 from typing import Protocol
 from uuid import uuid4
 
-from .hashing import hash_file_sha256
+from .hashing import hash_file_sha256, hash_manifest_id
 from .models import Artifact, DataSourceSpec, Manifest, utc_now
-
-"""
-Protocol for artifact collectors.
-"""
 
 
 class ArtifactCollector(Protocol):
+    """Protocol for artifact collectors."""
+
     def collect(self, source: DataSourceSpec) -> Manifest: ...
 
 
-# Simple extension -> media (MIME) type mapping; used for basic inference but can be overridden
-#   by user-provided metadata.
-# Note: this is not meant to be comprehensive, just cover common cases. For more robust inference,
-#    users can provide explicit media types in metadata or use custom collectors.
+# Extension -> MIME type mapping for basic inference; not meant to be comprehensive.
 _MEDIA_BY_EXT: dict[str, str] = {
     ".csv": "text/csv",
     ".tsv": "text/tab-separated-values",
@@ -43,83 +38,39 @@ _MEDIA_BY_EXT: dict[str, str] = {
     ".tar": "application/x-tar",
 }
 
-"""
-Helper function to infer media type from file extension. Returns None if unknown. 
-    This is used in the FilesystemCollector to populate the media_type field of Artifacts.
-"""
-
 
 def _infer_media_type(path: Path) -> str | None:
+    """Return the MIME type for a file extension, or None if unknown."""
     return _MEDIA_BY_EXT.get(path.suffix.lower())
 
 
-"""
-Helper function to check if a path matches ANY of the provided glob patterns. 
-    If patterns is None or empty, it returns True (i.e., no filtering). 
-    This is used in the FilesystemCollector to apply include_globs rules.
-"""
+def _any_pattern_matches(path: Path, patterns: list[str]) -> bool:
+    return any(path.match(pat) for pat in patterns)
 
 
 def _matches_any(path: Path, patterns: list[str] | None) -> bool:
     """Return True if path matches ANY pattern; if patterns is None/empty, True."""
     if not patterns:
         return True
-    # Path.match supports glob-style patterns; use both basename and full path.
-    # Most useful patterns: "**/*.csv", "*.json", etc.
-    s = path.as_posix()
-    for pat in patterns:
-        if path.match(pat) or Path(s).match(pat):
-            return True
-    return False
-
-
-"""
-Return True if path matches ANY exclude pattern; if patterns is None/empty, False.
-"""
+    return _any_pattern_matches(path, patterns)
 
 
 def _excluded(path: Path, patterns: list[str] | None) -> bool:
-    """Return True if path matches ANY exclude pattern."""
+    """Return True if path matches ANY exclude pattern; if patterns is None/empty, False."""
     if not patterns:
         return False
-    s = path.as_posix()
-    for pat in patterns:
-        if path.match(pat) or Path(s).match(pat):
-            return True
-    return False
-
-
-"""
-Helper function to get mtime as timezone-aware UTC datetime. Returns None if stat fails 
-    (e.g., due to permissions issues). This is used in the FilesystemCollector to populate
-    the mtime field of Artifacts.
-"""
-
-
-def _mtime_utc(path: Path) -> datetime | None:
-    """Return timezone-aware UTC mtime (or None if stat fails)."""
-    st = path.stat()
-    return datetime.fromtimestamp(st.st_mtime, tz=UTC)
-
-
-"""
-FilesystemCollector is a simple implementation of ArtifactCollector that collects artifacts 
-    from the local filesystem. It supports both single-file and directory sources, 
-    with optional recursive traversal and include/exclude glob patterns. For each collected
-    file, it gathers metadata such as size, mtime, content hash (optional), and media type 
-    (inferred from extension). Any warnings encountered during collection are included in 
-    the resulting Manifest.
-- compute_hash: Whether to compute a content hash for each file (default: True).
-- source.uri: The filesystem path to collect from (can be a file or directory).
-- source.include_globs: Optional list of glob patterns to include (e.g., ["**/*.csv"]).
-- source.exclude_globs: Optional list of glob patterns to exclude (e.g., ["**/__pycache__/**"]).
-- source.recursive: Whether to search directories recursively (default: True).
-- source.hints: Optional dictionary for additional discovery hints
-"""
+    return _any_pattern_matches(path, patterns)
 
 
 @dataclass
 class FilesystemCollector:
+    """Collect artifacts from the local filesystem.
+
+    Supports single-file and directory sources with optional recursive traversal
+    and include/exclude glob patterns. Gathers metadata (size, mtime, content hash,
+    media type) for each discovered file.
+    """
+
     def collect(self, source: DataSourceSpec) -> Manifest:
         if source.source_type != "filesystem":
             raise ValueError(f"FilesystemCollector cannot handle source_type={source.source_type}")
@@ -206,7 +157,7 @@ class FilesystemCollector:
         artifacts.sort(key=lambda a: a.relative_path or "")
 
         return Manifest(
-            manifest_id=str(uuid4()),
+            manifest_id=hash_manifest_id(artifacts),
             source=source,
             created_at=utc_now(),
             artifacts=artifacts,

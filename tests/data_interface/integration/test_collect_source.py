@@ -3,6 +3,8 @@ import pytest
 from neurolab.data_interface.models import DataSourceSpec
 from neurolab.data_interface.orchestrator import collect_source
 
+pytestmark = [pytest.mark.data_interface]
+
 
 @pytest.mark.integration
 def test_collect_source_filesystem_basic(tmp_path):

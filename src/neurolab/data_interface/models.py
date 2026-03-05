@@ -20,19 +20,20 @@ def utc_now() -> datetime:
     return datetime.now(UTC)
 
 
-"""
-DataSourceSpec defines the parameters for discovering artifacts from a data source.
-- uri: The URI of the data source (e.g., file path, database connection string).
-- source_type: The type of data source (currently only "filesystem" is supported).
-- include_globs: Optional list of glob patterns to include (e.g., ["*.csv"]).
-- exclude_globs: Optional list of glob patterns to exclude (e.g., ["*.tmp"]).
-- recursive: Whether to search directories recursively (default: True).
-- hints: Optional dictionary for additional discovery hints (e.g., {"follow_symlinks": True}).
-"""
-
-
 @dataclass(frozen=True)
 class DataSourceSpec:
+    """Defines the parameters for discovering artifacts from a data source.
+
+    Attributes:
+        uri: The URI of the data source (e.g., file path, database connection string).
+        source_type: The type of data source (currently only "filesystem" is supported).
+        include_globs: Optional list of glob patterns to include (e.g., ["*.csv"]).
+        exclude_globs: Optional list of glob patterns to exclude (e.g., ["*.tmp"]).
+        compute_hash: Whether to compute content hash for each artifact (default: True).
+        recursive: Whether to search directories recursively (default: True).
+        hints: Optional dictionary for additional discovery hints.
+    """
+
     uri: str
     source_type: Literal["filesystem"] = "filesystem"
     include_globs: list[str] | None = None
@@ -41,22 +42,21 @@ class DataSourceSpec:
     recursive: bool = True
     hints: dict[str, Any] = field(default_factory=dict)
 
-    """to_dict serializes the DataSourceSpec instance to a dictionary."""
-
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dictionary."""
         return {
             "uri": self.uri,
             "source_type": self.source_type,
             "include_globs": self.include_globs,
             "exclude_globs": self.exclude_globs,
+            "compute_hash": self.compute_hash,
             "recursive": self.recursive,
             "hints": self.hints,
         }
 
-    """from_dict validates the input dictionary and constructs a DataSourceSpec instance."""
-
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> DataSourceSpec:
+        """Validate input and construct a DataSourceSpec instance."""
         if not isinstance(d, dict):
             raise TypeError("Input must be a dictionary")
         if "uri" not in d:
@@ -71,28 +71,29 @@ class DataSourceSpec:
             source_type=source_type,
             include_globs=d.get("include_globs"),
             exclude_globs=d.get("exclude_globs"),
+            compute_hash=d.get("compute_hash", True),
             recursive=d.get("recursive", True),
             hints=d.get("hints", {}),
         )
 
 
-"""
-Artifact represents a discovered artifact from a data source.
-- source_uri: The original URI where the artifact was discovered.
-- artifact_type: The type of artifact (e.g., "file", "db_table").
-- relative_path: The path of the artifact relative to the data source root (if applicable).
-- absolute_path: The absolute path of the artifact (if applicable).
-- size_bytes: The size of the artifact in bytes (if applicable).
-- mtime: The last modified time of the artifact (if applicable).
-- content_hash: A hash of the artifact's content for change detection (if applicable).
-- media_type: The media type of the artifact (e.g., "text/csv", "application/json") (if applicable).
-- artifact_id: A unique identifier for the artifact (defaults to a UUID).
-- tags: Optional dictionary of tags for additional metadata.
-"""
-
-
 @dataclass(frozen=True)
 class Artifact:
+    """Represents a discovered artifact from a data source.
+
+    Attributes:
+        source_uri: The original URI where the artifact was discovered.
+        artifact_type: The type of artifact (e.g., "file", "db_table").
+        relative_path: Path relative to the data source root (if applicable).
+        absolute_path: Absolute filesystem path (if applicable).
+        size_bytes: Size in bytes (if applicable).
+        mtime: Last modified time (if applicable).
+        content_hash: SHA-256 hash of contents for change detection (if applicable).
+        media_type: MIME type (e.g., "text/csv") (if applicable).
+        artifact_id: Unique identifier (defaults to a UUID).
+        tags: Optional dictionary of additional metadata.
+    """
+
     source_uri: str
     artifact_type: Literal["file", "db_table"]
     relative_path: str | None
@@ -110,9 +111,8 @@ class Artifact:
     artifact_id: str = field(default_factory=lambda: str(uuid4()))
     tags: dict[str, str] = field(default_factory=dict)
 
-    """to_dict serializes the Artifact instance to a dictionary."""
-
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dictionary."""
         return {
             "artifact_id": self.artifact_id,
             "source_uri": self.source_uri,
@@ -126,10 +126,9 @@ class Artifact:
             "tags": self.tags,
         }
 
-    """from_dict validates the input dictionary and constructs an Artifact instance."""
-
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Artifact:
+        """Validate input and construct an Artifact instance."""
         if not isinstance(d, dict):
             raise TypeError("Input must be a dictionary")
         if "artifact_id" not in d:
@@ -162,33 +161,30 @@ class Artifact:
         )
 
 
-"""
-Manifest represents the result of an artifact discovery process.
-- manifest_id: A unique identifier for the manifest (defaults to a UUID).
-- source: The DataSourceSpec that was used for discovery.
-- created_at: The timestamp when the manifest was created (in UTC).
-- artifacts: A list of discovered Artifact instances.
-- warnings: Optional list of warning messages encountered during discovery.
-"""
-
-
 @dataclass(frozen=True)
 class Manifest:
+    """Represents the result of an artifact discovery process.
+
+    Attributes:
+        manifest_id: Deterministic identifier derived from artifact content.
+        source: The DataSourceSpec used for discovery.
+        created_at: UTC timestamp of manifest creation.
+        artifacts: List of discovered Artifact instances.
+        warnings: Warning messages encountered during discovery.
+    """
+
     manifest_id: str
     source: DataSourceSpec
     created_at: datetime
     artifacts: list[Artifact]
     warnings: list[str] = field(default_factory=list)
 
-    """artifact_count returns the number of artifacts in the manifest."""
-
     @property
     def artifact_count(self) -> int:
         return len(self.artifacts)
 
-    """to_dict serializes the Manifest instance to a dictionary."""
-
     def to_dict(self) -> dict[str, Any]:
+        """Serialize to a dictionary."""
         return {
             "manifest_id": self.manifest_id,
             "source": self.source.to_dict(),
@@ -197,10 +193,9 @@ class Manifest:
             "warnings": self.warnings,
         }
 
-    """from_dict validates the input dictionary and constructs a Manifest instance."""
-
     @classmethod
     def from_dict(cls, d: dict[str, Any]) -> Manifest:
+        """Validate input and construct a Manifest instance."""
         if not isinstance(d, dict):
             raise TypeError("Input must be a dictionary")
         if "manifest_id" not in d:

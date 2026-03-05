@@ -1,218 +1,416 @@
-Project Scope Document - AI generated with GPT 5.2, edited by Zach Fontenot
+# Neurolab
 
-Working Name: Magi Analytics Framework 
-Author: Zach Fontenot
-Version: 0.1 (Concept Phase)
+**Deterministic Research Data Engine**
 
-1. Vision
+- **Author:** Zach Fontenot  
+- **Status:** Early Development (v0.x)  
+- **License:** Planned Open Source  
 
-Create a modular, extensible data analysis framework that:
+---
 
-Accepts complex structured datasets
+## Table of Contents
 
-Cleans and normalizes them within a defined schema
+1. [Project Overview](#1-project-overview)
+2. [Vision & Motivation](#2-vision--motivation)
+3. [Design Philosophy](#3-design-philosophy)
+4. [Project Scope](#4-project-scope)
+5. [System Architecture](#5-system-architecture)
+6. [Core Components](#6-core-components)
+7. [Data Model](#7-data-model)
+8. [Deterministic Data Principles](#8-deterministic-data-principles)
+9. [Reproducibility Model](#9-reproducibility-model)
+10. [CLI Interface](#10-cli-interface)
+11. [Development Environment](#11-development-environment)
+12. [Project Structure](#12-project-structure)
+13. [Testing Strategy](#13-testing-strategy)
+14. [Plugin & Extension System](#14-plugin--extension-system)
+15. [Roadmap](#15-roadmap)
+16. [Lifecycle Diagrams](#16-lifecycle-diagrams)
+17. [Development Principles & Contributing](#17-development-principles--contributing)
+18. [Current Status](#18-current-status)
 
-Runs automated statistical analysis
+---
 
-Supports plug-in custom scripts for advanced metrics
+## 1. Project Overview
 
-Uses AI-assisted interpretation to surface high-value insights (gumbo boil)
+Neurolab is a **deterministic data processing engine** designed for scientific research workflows. The system provides infrastructure for:
 
-Produces reproducible, explainable outputs
+- **Structured dataset ingestion**
+- **Dataset discovery and artifact tracking**
+- **Deterministic dataset representation**
+- **Reproducible analysis pipelines**
+- **Automated dataset comparison**
+- **AI-assisted insight discovery** (future)
 
-This system replaces tightly coupled one-off scripts with a reusable analytical engine.
+The value chain:
 
-2. Core Objectives
-2.1 Functional Objectives
+```
+raw datasets → artifacts → manifests → analysis pipelines → insights
+```
 
-The system must:
+The goal is to provide **research infrastructure**, not a single-purpose analysis application. By focusing on deterministic identity and manifest-based versioning first, Neurolab creates a stable foundation that any downstream analysis (statistical, ML, or AI) can rely on without sacrificing reproducibility.
 
-Ingest structured datasets (CSV, SQL tables, etc.)
+---
 
-Validate data against a defined schema
+## 2. Vision & Motivation
 
-Perform standardized cleaning + preprocessing
+### Vision
 
-Run baseline statistical analysis automatically
+Modern research workflows often suffer from:
 
-Support plug-in modules for domain-specific metrics
+- Fragmented scripts  
+- Inconsistent dataset handling  
+- Poor reproducibility  
+- Undocumented preprocessing  
+- Difficulty identifying patterns in large datasets  
 
-Store results in a central database
+Neurolab addresses these by providing a deterministic research data engine that lets researchers:
 
-Generate:
+- Ingest complex datasets  
+- Standardize dataset structure  
+- Automatically track dataset changes  
+- Run consistent analytical pipelines  
+- Surface high-value insights from large data spaces  
 
-Summary reports
+The aim is to **reduce the friction between raw data and scientific insight**.
 
-Statistical outputs
+### Motivation
 
-AI-generated interpretation layer
+Labs often accumulate hundreds or thousands of small scripts to process datasets. Common problems:
 
-Flags for statistically or clinically meaningful patterns
+- Tightly coupled pipelines  
+- Undocumented transformations  
+- Inconsistent analysis results  
+- Inability to reproduce prior experiments  
+- Manual data inspection  
 
-2.2 Non-Functional Objectives
+Neurolab replaces fragile research scripts with a structured engine that provides:
 
-The system should:
+- **Deterministic dataset identity**  
+- **Automated dataset discovery**  
+- **Standardized metadata tracking**  
+- **Reproducible pipelines**  
+- **Modular extension points**  
 
-Be modular (low coupling, high cohesion)
+The goal is not to replace scientific reasoning, but to build **infrastructure that supports it**.
 
-Be extensible via plug-in architecture
+---
 
-Maintain reproducibility
+## 3. Design Philosophy
 
-Log all transformations and analyses
+### Determinism
 
-Be deployable locally first (cloud optional later)
+Given identical inputs, the system must produce identical outputs. This enables:
 
-Be secure if used with sensitive data
+- Reproducible science  
+- Reliable debugging  
+- Dataset identity verification  
+- Stable research pipelines  
 
-3. High-Level Architecture
-3.1 Core Layers
-1. Data Layer
+Enforced through **content hashing**, **stable artifact ordering**, and **immutable manifests**.
 
-Core relational database
+### Reproducibility
 
-Stores:
+A dataset processed through Neurolab should always be reconstructable. Researchers should be able to say: *“This analysis was performed using manifest X.”* Anyone with the same source data can regenerate that manifest and reproduce results.
 
-Raw datasets
+### Modularity
 
-Cleaned datasets
+Neurolab is built from loosely coupled modules: collectors, adapters, processing pipelines, storage backends, analysis modules. Each component has a clear responsibility and interface; modules should be replaceable without affecting others.
 
-Metadata
+### Transparency
 
-Analysis outputs
+Every result must be traceable back to raw data, transformations applied, pipeline configuration, and dataset manifest—avoiding “black box” research workflows.
 
-Plugin results
+### Simplicity Over Cleverness
 
-AI interpretations
+The project favors **clear code**, **explicit logic**, and **understandable architecture** over complex abstractions. Future researchers should be able to understand the system quickly.
 
-2. Processing Engine
+---
 
-Handles:
+## 4. Project Scope
 
-Data validation
+Neurolab focuses on building a **deterministic data engine**. For clarity:
 
-Cleaning
+- **Neurolab is not** a ML project.  
+- **Neurolab is not** the analysis pipeline itself.  
+- **Neurolab is** infrastructure supporting those workflows.  
 
-Feature engineering
+Domain-agnostic design allows the same engine to support many scientific domains; analysis and AI layers are built on top of deterministic manifests.
 
-Statistical testing
+---
 
-Model execution
+## 5. System Architecture
 
-3. Plugin Framework
+Layered architecture:
 
-Allows user-defined analysis modules
+```
+User
+  │
+  ▼
+CLI Interface
+  │
+  ▼
+Orchestrator
+  │
+  ▼
+Collectors
+  │
+  ▼
+Models
+  │
+  ▼
+Manifest Store
+  │
+  ▼
+Future Processing / Analysis Layers
+```
 
-Standard interface (e.g., analyze(dataset) -> result_object)
+Each layer has a distinct responsibility.
 
-Plugins can:
+---
 
-Compute custom metrics
+## 6. Core Components
 
-Add derived features
+### CLI Layer
 
-Register outputs to DB
+- **Role:** Primary user interface.  
+- **Responsibilities:** Command routing, input validation, formatted output.  
+- **Stack:** Typer, Rich.  
+- **Example:** `neurolab collect data/`
 
-4. Insight Engine (AI Layer)
+### Orchestrator
 
-Consumes structured outputs
+- **Role:** Coordinates ingestion workflows.  
+- **Example operation:** `collect_source(DataSourceSpec)` — select collector, coordinate artifact discovery, assemble manifests.
 
-Identifies:
+### Collectors
 
-Significant correlations
+- **Role:** Discover artifacts in data sources.  
+- **Current:** `FilesystemCollector` (directory traversal, metadata extraction, hashing, artifact creation).  
+- **Properties:** Deterministic, stateless, modular.  
+- **Future options:** SQLiteCollector, PostgresCollector, S3Collector, APICollector.
 
-Unexpected variance
+### Models
 
-Model performance signals
+- **Role:** Data contracts used across all layers.  
+- **Key types:** `DataSourceSpec`, `Artifact`, `Manifest`.
 
-Outliers
+### Manifest Store
 
-Produces:
+- **Role:** Persist manifests.  
+- **Current:** `FileManifestStore` at `~/.neurolab/data/manifests/`.  
+- **Future:** SQLite, PostgreSQL, cloud storage.
 
-Structured summaries
+---
 
-Suggested next investigations
+## 7. Data Model
 
-Hypothesis prompts
+### DataSourceSpec
 
-5. Reporting Layer
+Describes where data originates, e.g.:
 
-CLI output
+```python
+DataSourceSpec(
+    uri="data/",
+    recursive=True,
+    include_globs=["**/*.csv"]
+)
+```
 
-PDF export
+### Artifact
 
-Structured JSON
+Represents an atomic data unit. Fields include: `artifact_id`, `relative_path`, `size_bytes`, `mtime`, `content_hash`, `media_type`. Artifacts are the smallest units Neurolab tracks.
 
-Optional web dashboard (future)
+### Manifest
 
-4. MVP Definition (Minimum Viable Product)
+Represents dataset state at collection time: `manifest_id`, `source`, `created_at`, `artifacts`, `warnings`. Manifests must be **immutable**, **deterministic**, **serializable**, and **comparable**.
 
-You are not building the final vision first.
+---
 
-MVP Must Include:
+## 8. Deterministic Data Principles
 
-Dataset ingestion (CSV)
+- **Content hashing:** Each artifact stores `SHA256(file_contents)` for reliable change detection, reproducible comparison, and caching.  
+- **Stable ordering:** Artifacts are ordered deterministically to avoid nondeterministic manifests.  
+- **Immutable manifests:** Manifests are snapshots; they cannot be modified after creation.
 
-Schema validation
+---
 
-Basic cleaning (NA handling, type enforcement)
+## 9. Reproducibility Model
 
-Automated statistical summary:
+Researchers can share:
 
-Descriptive stats
+- Dataset manifest  
+- Pipeline configuration  
+- Analysis scripts  
 
-Correlation matrix
+So that others can reproduce results. Deterministic manifests are the anchor for this workflow.
 
-Basic regression
+---
 
-Plugin support for 1 custom metric
+## 10. CLI Interface
 
-AI-generated summary of findings
+| Command | Description |
+|--------|-------------|
+| `neurolab collect <path>` | Collect dataset from path |
+| `neurolab history` | Show manifest history |
+| `neurolab show <manifest_id>` | Inspect a manifest |
+| `neurolab diff <manifest1> <manifest2>` | Compare two manifests |
+| `neurolab delete <manifest_id>` | Delete a manifest |
+| `neurolab clear` | Clear history |
 
-Exportable PDF report
+---
 
-That’s it.
+## 11. Development Environment
 
-If it does that cleanly, it’s a win.
+- **Python:** 3.11+  
+- **CLI / UX:** Typer, Rich  
+- **Testing:** pytest  
+- **Linting / formatting:** Ruff  
+- **Package management:** uv  
+- **Hooks:** pre-commit  
 
-5. Out of Scope (For Now)
+**Primary platforms:** Windows 11, WSL (Ubuntu), VS Code.
 
-Real-time streaming analytics
+| Task | Command |
+|------|--------|
+| Install dependencies | `uv sync` |
+| Run all tests | `pytest` |
+| Run by layer | `pytest -m data_interface`, `pytest -m storage` |
+| Run unit only | `pytest -m unit` |
+| Lint | `ruff check .` |
+| Format | `ruff format .` |
 
-Complex GUI
+---
 
-Multi-tenant cloud infrastructure
+## 12. Project Structure
 
-Enterprise authentication systems
+Current layout (src layout to avoid import issues):
 
-Fully automated causal inference
+```
+neurolab/
+├── src/neurolab/
+│   ├── data_interface/   # collectors, hashing, models, orchestrator
+│   ├── storage/          # manifest_store
+│   └── interfaces/       # cli.py
+├── tests/                # organized by layer, then unit vs integration
+│   ├── data_interface/   # unit/ and integration/ for this layer
+│   ├── storage/          # unit/ (manifest store)
+│   ├── interfaces/       # placeholder for CLI tests
+│   └── conftest.py
+├── docs/
+├── pyproject.toml
+└── README.md
+```
 
-Deep learning model orchestration platform
+Models live in `data_interface/models.py`; the CLI is in `interfaces/cli.py`.
 
-You are building a powerful analytical tool, not Palantir.
+---
 
-6. Risks
+## 13. Testing Strategy
 
-Overengineering early
+- **Framework:** pytest.  
+- **Layout:** Tests are organized by **layer** (mirroring `src/neurolab/`): `tests/data_interface/`, `tests/storage/`, `tests/interfaces/`. Within each layer, `unit/` and `integration/` subdirs separate fast isolated tests from tests that use the filesystem or external data.  
+- **Markers:** Use `-m` to run tests by layer or by type:
+  - **By layer:** `pytest -m data_interface`, `pytest -m storage`, `pytest -m interfaces`
+  - **By type:** `pytest -m unit`, `pytest -m integration`
+  - **All:** `pytest` or `pytest tests/`
+- **Unit tests:** Individual modules (models, hashing, collectors, manifest store).  
+- **Integration tests:** Orchestrator + collector pipelines, manifest_id stability (e.g. against `test_data/`).  
 
-Scope creep
+Tests should be **deterministic**, **isolated**, and **fast**. Filesystem tests use temporary directories (`tmp_path`).
 
-Mixing AI interpretation too deeply into raw analysis layer
+---
 
-Rebuilding instead of refactoring legacy scripts
+## 14. Plugin & Extension System
 
-Losing reproducibility
+Planned extension interface: `analyze(dataset) -> result_object`. Plugins may compute custom metrics, perform domain-specific analysis, add derived features, or generate reports. They should **not** modify core system behavior; they operate on deterministic datasets produced by the engine.
 
-7. Success Metrics
+---
 
-The system is successful if:
+## 15. Roadmap
 
-You can plug in a new dataset with minimal custom code
+### Data Processing & Analysis (after ingestion is stable)
 
-You can attach a new plugin in <30 minutes
+- Statistical summaries, correlation analysis, regression, anomaly detection, feature extraction — all on structured datasets derived from manifests.
 
-The system produces structured statistical output automatically
+### AI Insight Layer (future)
 
-The AI layer surfaces at least one non-obvious insight per dataset
+- Pattern discovery, anomaly detection, hypothesis suggestion, experiment comparison, trend detection. AI operates only on deterministic datasets to preserve reproducibility.
 
-You reuse it for at least 3 separate projects
+### Planned major features
+
+| Area | Plans |
+|------|--------|
+| **Adapter system** | Parsers for CSV, JSON, Parquet, SQL tables |
+| **Database manifest storage** | SQLite, PostgreSQL backends |
+| **Dataset versioning** | Full dataset lineage tracking |
+| **Analysis framework** | Automated statistical workflows |
+| **AI insight engine** | Automated discovery of meaningful patterns |
+
+### Long-term vision
+
+Neurolab may evolve into: research data versioning, deterministic pipeline framework, automated analysis infrastructure, and AI-assisted research platform—all while staying **small enough to understand** and **powerful enough to matter**.
+
+---
+
+## 16. Lifecycle Diagrams
+
+### Manifest Lifecycle
+
+```
+Dataset → Artifact Discovery → Manifest Generation → Manifest Storage
+    → Manifest Comparison → Downstream Analysis
+```
+
+Manifests are the dataset versioning layer.
+
+### Artifact Lifecycle
+
+```
+Data Source → Collector → Artifact Creation → Hash Computation → Manifest Assembly
+```
+
+Artifacts are the atomic data units.
+
+---
+
+## 17. Development Principles & Contributing
+
+### Development principles
+
+- Deterministic behavior  
+- Modular architecture  
+- Explicit interfaces  
+- Strict testing  
+- Readable code, minimal hidden logic  
+
+Automation: linting, formatting, and testing before commit (e.g. via pre-commit).
+
+### Contributing philosophy
+
+Neurolab is intended to become an open-source research infrastructure project. Goals: transparency, reproducible science, community collaboration, long-term maintainability. Contributions should prioritize **clarity**, **determinism**, and **modularity**.
+
+---
+
+## 18. Current Status
+
+**Implemented:**
+
+- CLI interface  
+- Filesystem collector  
+- Artifact discovery  
+- Content hashing  
+- Manifest generation  
+- Manifest storage  
+- Dataset diff engine  
+- Testing framework  
+
+**In progress:**
+
+- Adapter layer  
+- Improved diff logic  
+- Expanded collectors  
+
+---
+
+*Guiding principle: Neurolab aims to be **small enough to understand**, **powerful enough to matter**—prioritizing reproducibility, determinism, extensibility, and scientific usefulness.*

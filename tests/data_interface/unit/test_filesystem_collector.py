@@ -3,6 +3,8 @@ import pytest
 from neurolab.data_interface.collectors import FilesystemCollector
 from neurolab.data_interface.models import DataSourceSpec
 
+pytestmark = [pytest.mark.data_interface]
+
 
 def _hash_map(manifest):
     """
@@ -92,3 +94,21 @@ def test_empty_directory(tmp_path):
 
     assert m.artifacts == []
     assert m.warnings == []
+
+
+@pytest.mark.unit
+def test_single_file_source(tmp_path):
+    """Collecting a source that points to a single file yields one artifact with relative_path None."""
+    single_file = tmp_path / "only.csv"
+    single_file.write_text("a,b\n1,2")
+
+    source = DataSourceSpec(uri=str(single_file))
+    collector = FilesystemCollector()
+    m = collector.collect(source)
+
+    assert len(m.artifacts) == 1
+    art = m.artifacts[0]
+    assert art.relative_path is None
+    assert art.artifact_type == "file"
+    assert art.absolute_path == str(single_file.resolve())
+    assert art.content_hash is not None
