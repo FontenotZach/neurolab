@@ -38,4 +38,5 @@ markers = [
     "data_interface: tests for the data_interface layer (models, hashing, collectors, orchestrator).",
     "storage: tests for the storage layer (manifest store).",
     "interfaces: tests for the interfaces layer (CLI).",
+    "adapters: tests for the adapters layer (core, pipeline, implementations).",
 ]

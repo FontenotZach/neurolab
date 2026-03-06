@@ -1,6 +1,6 @@
 """
 Tests for the Neurolab CLI commands using Typer's CliRunner.
-Covers collect, history, show, info, diff, delete, and clear.
+Covers collect, history, show, info, diff, delete, clear, and parse.
 """
 
 from __future__ import annotations
@@ -120,6 +120,32 @@ def test_show_after_collect(cli_env, sample_source):
     result = runner.invoke(app, ["show", mid])
     assert result.exit_code == 0
     assert mid in result.output
+
+
+# --- parse ---
+
+
+@pytest.mark.unit
+def test_parse_missing_manifest(cli_env):
+    result = runner.invoke(app, ["parse", "nonexistent"])
+    assert result.exit_code == 1
+    assert "not found" in result.output
+
+
+@pytest.mark.unit
+def test_parse_after_collect(cli_env, sample_source):
+    """Parse runs pipeline and prints Manifest, Artifacts processed, Adapters used, Outputs, Skipped."""
+    runner.invoke(app, ["collect", str(sample_source)])
+    store = FileManifestStore()
+    mid = store.list()[0]
+    result = runner.invoke(app, ["parse", mid])
+    assert result.exit_code == 0
+    assert "Manifest:" in result.output
+    assert "Artifacts processed: 2" in result.output
+    assert "Adapters used:" in result.output
+    assert "csv_adapter:" in result.output
+    assert "Outputs generated:" in result.output
+    assert "Skipped artifacts:" in result.output
 
 
 # --- diff ---

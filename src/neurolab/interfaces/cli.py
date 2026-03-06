@@ -4,6 +4,7 @@ import typer
 from rich import print
 from rich.table import Table
 
+from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipeline
 from neurolab.data_interface.models import DataSourceSpec
 from neurolab.data_interface.orchestrator import collect_source
 from neurolab.storage.manifest_store import FileManifestStore
@@ -400,3 +401,36 @@ def show(manifest_id: str):
     table.add_row("Warnings", str(len(manifest.warnings)))
 
     print(table)
+
+
+@app.command()
+def parse(manifest_id: str):
+    """
+    Run the adapter pipeline on a stored manifest and show a summary of outputs and skips.
+    """
+    store = FileManifestStore()
+    roster_store = RosterStore()
+    resolved_id = _resolve_manifest_id(manifest_id, roster_store)
+
+    try:
+        manifest = store.load(resolved_id)
+    except FileNotFoundError as err:
+        print(f"[red]Manifest {manifest_id} not found.[/red]")
+        raise typer.Exit(code=1) from err
+
+    pipeline = AdapterPipeline()
+    result = pipeline.process_manifest(manifest)
+
+    # Adapter usage counts (outputs per adapter_name)
+    adapter_counts: dict[str, int] = {}
+    for out in result.outputs:
+        adapter_counts[out.adapter_name] = adapter_counts.get(out.adapter_name, 0) + 1
+
+    manifest_display = resolved_id if len(resolved_id) <= 12 else f"{resolved_id[:8]}..."
+    print(f"Manifest: {manifest_display}")
+    print(f"Artifacts processed: {len(manifest.artifacts)}")
+    print("Adapters used:")
+    for name, count in sorted(adapter_counts.items()):
+        print(f"  {name}: {count}")
+    print(f"Outputs generated: {len(result.outputs)} datasets")
+    print(f"Skipped artifacts: {len(result.skipped_artifacts)}")
