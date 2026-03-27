@@ -5,10 +5,16 @@ Covers collect, history, show, info, diff, delete, clear, and parse.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import pytest
 from typer.testing import CliRunner
 
+from neurolab.adapters.core.output import AdapterOutput
+from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipelineResult
+from neurolab.data_interface.models import DataSourceSpec, Manifest
 from neurolab.interfaces.cli import app
+from neurolab.storage.adapter_results.file_store import FileAdapterResultStore
 from neurolab.storage.manifest_store import FileManifestStore
 from neurolab.storage.roster_store import RosterStore
 
@@ -22,6 +28,7 @@ def cli_env(tmp_path, monkeypatch):
     """Redirect manifest store and roster to tmp_path so tests are isolated."""
     manifest_dir = tmp_path / "manifests"
     roster_path = tmp_path / "roster.json"
+    adapter_dir = tmp_path / "adapter_outputs"
 
     def _patched_manifest_store_init(self, base_dir=None):
         self.base_dir = manifest_dir
@@ -31,10 +38,36 @@ def cli_env(tmp_path, monkeypatch):
         self.path = roster_path
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
+    def _patched_adapter_result_store_init(self, base_dir=None):
+        self.base_dir = adapter_dir
+        self.base_dir.mkdir(parents=True, exist_ok=True)
+
     monkeypatch.setattr(FileManifestStore, "__init__", _patched_manifest_store_init)
     monkeypatch.setattr(RosterStore, "__init__", _patched_roster_store_init)
+    monkeypatch.setattr(FileAdapterResultStore, "__init__", _patched_adapter_result_store_init)
 
     return tmp_path
+
+
+def _save_child_record(tmp_path, manifest_id: str, payload):
+    store = FileAdapterResultStore(base_dir=tmp_path / "adapter_outputs")
+    m = Manifest(
+        manifest_id=manifest_id,
+        source=DataSourceSpec(uri="file:///x", compute_hash=True),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+        artifacts=[],
+        warnings=[],
+    )
+    out = AdapterOutput(
+        artifact_id="art-1",
+        adapter_name="t",
+        adapter_version="1.0",
+        dataset_type="tabular",
+        schema={"k": 1},
+        payload=payload,
+    )
+    saved = store.save_pipeline_result(m, AdapterPipelineResult(outputs=[out], skipped_artifacts=[]))
+    return saved[0].stored_output_id
 
 
 @pytest.fixture()
@@ -146,6 +179,95 @@ def test_parse_after_collect(cli_env, sample_source):
     assert "csv_adapter:" in result.output
     assert "Outputs generated:" in result.output
     assert "Skipped artifacts:" in result.output
+
+
+# --- children / child ---
+
+
+@pytest.mark.unit
+def test_children_empty(cli_env):
+    result = runner.invoke(app, ["children", "mid-1"])
+    assert result.exit_code == 0
+    assert "No persisted child records found" in result.output
+
+
+@pytest.mark.unit
+def test_children_lists_records(cli_env, tmp_path):
+    sid = _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
+    result = runner.invoke(app, ["children", "mid-1"])
+    assert result.exit_code == 0
+    assert "Children of manifest mid-1" in result.output
+    assert sid[:12] in result.output
+    assert "art-1" in result.output
+    assert "t" in result.output
+
+
+@pytest.mark.unit
+def test_children_long(cli_env, tmp_path):
+    _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
+    result = runner.invoke(app, ["children", "mid-1", "--long"])
+    assert result.exit_code == 0
+    # Column headers may truncate in Rich tables; check for the payload_format value prefix.
+    assert "neur" in result.output
+
+
+@pytest.mark.unit
+def test_child_show(cli_env, tmp_path):
+    sid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+    result = runner.invoke(app, ["child", "show", "mid-1", sid])
+    assert result.exit_code == 0
+    assert "stored_output_id" in result.output
+    assert "schema" in result.output
+    assert '"k": 1' in result.output
+
+
+@pytest.mark.unit
+def test_child_payload_json(cli_env, tmp_path):
+    sid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+    result = runner.invoke(app, ["child", "payload", "mid-1", sid])
+    assert result.exit_code == 0
+    assert '"x": 1' in result.output
+
+
+@pytest.mark.unit
+def test_child_payload_ndarray_summarized_and_full(cli_env, tmp_path):
+    np = pytest.importorskip("numpy")
+    sid = _save_child_record(tmp_path, "mid-1", payload={"signal": np.asarray([1.0, 2.0], dtype=np.float32)})
+
+    result = runner.invoke(app, ["child", "payload", "mid-1", sid])
+    assert result.exit_code == 0
+    assert "__ndarray__" in result.output
+    assert "shape" in result.output
+
+    result_full = runner.invoke(app, ["child", "payload", "mid-1", sid, "--full"])
+    assert result_full.exit_code == 0
+    assert "__ndarray__" not in result_full.output
+    assert "1.0" in result_full.output
+
+
+@pytest.mark.unit
+def test_children_delete_confirm_and_abort(cli_env, tmp_path):
+    _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+
+    abort = runner.invoke(app, ["children", "delete", "mid-1"], input="n\n")
+    assert abort.exit_code == 0
+    assert "Aborting" in abort.output
+
+    ok = runner.invoke(app, ["children", "delete", "mid-1"], input="y\n")
+    assert ok.exit_code == 0
+    assert "Deleted" in ok.output
+
+    after = runner.invoke(app, ["children", "mid-1"])
+    assert after.exit_code == 0
+    assert "No persisted child records found" in after.output
+
+
+@pytest.mark.unit
+def test_children_delete_yes(cli_env, tmp_path):
+    _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+    result = runner.invoke(app, ["children", "delete", "mid-1", "--yes"])
+    assert result.exit_code == 0
+    assert "Deleted" in result.output
 
 
 # --- diff ---
