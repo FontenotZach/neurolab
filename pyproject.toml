@@ -5,8 +5,11 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = [
+    "numpy>=1.26",
+    "neo>=0.14.3",
     "rich>=14.3.2",
     "typer>=0.21.1",
+    "python-dateutil>=2.9.0.post0",
 ]
 
 [project.scripts]
@@ -38,4 +41,5 @@ markers = [
     "data_interface: tests for the data_interface layer (models, hashing, collectors, orchestrator).",
     "storage: tests for the storage layer (manifest store).",
     "interfaces: tests for the interfaces layer (CLI).",
+    "adapters: tests for the adapters layer (core, pipeline, implementations).",
 ]

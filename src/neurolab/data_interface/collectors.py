@@ -36,6 +36,7 @@ _MEDIA_BY_EXT: dict[str, str] = {
     ".zip": "application/zip",
     ".gz": "application/gzip",
     ".tar": "application/x-tar",
+    ".ncs": "application/x-neuralynx-ncs",
 }
 
 

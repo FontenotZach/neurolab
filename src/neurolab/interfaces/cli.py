@@ -1,17 +1,27 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+from typing import Annotated, Any
+
 import typer
 from rich import print
 from rich.table import Table
 
+from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipeline
 from neurolab.data_interface.models import DataSourceSpec
 from neurolab.data_interface.orchestrator import collect_source
+from neurolab.storage.adapter_results import FileAdapterResultStore
+from neurolab.storage.adapter_results.errors import StoredOutputNotFound
 from neurolab.storage.manifest_store import FileManifestStore
 from neurolab.storage.roster_store import RosterStore
 
 app = typer.Typer(no_args_is_help=True)
 roster_app = typer.Typer(help="Manage a short list of manifest aliases (e.g. r1, r2) for quick reference.")
 app.add_typer(roster_app, name="roster")
+
+child_app = typer.Typer(help="Inspect persisted parsed child records derived from a manifest.")
+app.add_typer(child_app, name="child")
 
 
 @app.callback()
@@ -29,6 +39,225 @@ def _resolve_manifest_id(
     if resolved is not None:
         return resolved
     return id_or_alias
+
+
+def _canonical_manifest_id(manifest_id_or_prefix: str) -> str:
+    """
+    Resolve a full manifest_id from an id or unique prefix using the manifest store.
+    If the manifest is not found, return the input unchanged.
+    """
+    store = FileManifestStore()
+    try:
+        m = store.load(manifest_id_or_prefix)
+        return m.manifest_id
+    except FileNotFoundError:
+        return manifest_id_or_prefix
+
+
+def _short_id(s: str, n: int = 12) -> str:
+    return s if len(s) <= n else f"{s[:n]}..."
+
+
+def _render_payload_for_display(obj: Any, *, full: bool) -> Any:
+    """
+    Convert payload to a JSON-serializable display structure.
+    Default behavior summarizes ndarray leaves; --full expands arrays via tolist().
+    """
+    try:
+        import numpy as np  # type: ignore
+    except Exception:
+        np = None  # type: ignore
+
+    if np is not None and isinstance(obj, np.ndarray):
+        if full:
+            return obj.tolist()
+        return {"__ndarray__": {"dtype": str(obj.dtype), "shape": [int(x) for x in obj.shape]}}
+
+    if isinstance(obj, dict):
+        return {str(k): _render_payload_for_display(v, full=full) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_render_payload_for_display(v, full=full) for v in obj]
+    return obj
+
+
+@app.command()
+def children(
+    manifest_id_or_action: Annotated[str, typer.Argument(help="Manifest ID (or roster alias), or the action 'delete'.")],
+    manifest_id: Annotated[str | None, typer.Argument(help="Manifest ID (or roster alias) when using the 'delete' action.")] = None,
+    long: Annotated[
+        bool,
+        typer.Option("--long", help="Include additional metadata columns (adapter_version, payload_format, row_count)."),
+    ] = False,
+    yes: Annotated[
+        bool,
+        typer.Option("--yes", help="Skip confirmation prompt (only applies to delete)."),
+    ] = False,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--adapter-store-dir",
+            help="Base directory for adapter results (default: ~/.neurolab/data/adapter_outputs).",
+            path_type=Path,
+        ),
+    ] = None,
+):
+    """
+    List persisted parsed child records derived from a manifest.
+    """
+    roster_store = RosterStore()
+    store = FileAdapterResultStore(base_dir=adapter_store_dir)
+
+    # Support both:
+    # - neurolab children <manifest_id>
+    # - neurolab children delete <manifest_id>
+    if manifest_id_or_action == "delete":
+        if manifest_id is None:
+            print("[red]Missing manifest_id for delete.[/red]")
+            raise typer.Exit(code=2)
+        resolved_id = _resolve_manifest_id(manifest_id, roster_store)
+        canonical_id = _canonical_manifest_id(resolved_id)
+        existing = store.list_outputs(canonical_id)
+        if not existing:
+            print(f"[yellow]No persisted child records found for manifest {canonical_id}.[/yellow]")
+            return
+        if not yes:
+            confirm = typer.confirm(
+                f"This action will delete {len(existing)} persisted child record(s) derived from manifest {canonical_id}. Continue?",
+                default=False,
+            )
+            if not confirm:
+                print("[yellow]Aborting.[/yellow]")
+                return
+        store.delete_manifest_outputs(canonical_id)
+        print(f"[green]Deleted {len(existing)} persisted child record(s) for manifest {canonical_id}.[/green]")
+        return
+
+    if manifest_id is not None:
+        print("[red]Unexpected extra argument.[/red]")
+        raise typer.Exit(code=2)
+
+    resolved_id = _resolve_manifest_id(manifest_id_or_action, roster_store)
+    canonical_id = _canonical_manifest_id(resolved_id)
+    children_meta = store.list_outputs(canonical_id)
+    if not children_meta:
+        print(f"[yellow]No persisted child records found for manifest {canonical_id}.[/yellow]")
+        return
+
+    table = Table(title=f"Children of manifest {canonical_id}")
+    table.add_column("Ordinal", justify="right", style="bold cyan")
+    table.add_column("Stored Output ID", style="cyan", no_wrap=True)
+    table.add_column("Artifact ID", style="green", no_wrap=True)
+    table.add_column("Adapter", style="bold")
+    table.add_column("Dataset Type")
+    if long:
+        table.add_column("Adapter Ver", style="dim")
+        table.add_column("Payload Format", style="dim")
+        table.add_column("Row Count", justify="right", style="dim")
+
+    for meta in children_meta:
+        row = [
+            str(meta.pipeline_ordinal),
+            _short_id(meta.stored_output_id, 12),
+            meta.artifact_id,
+            meta.adapter_name,
+            meta.dataset_type,
+        ]
+        if long:
+            row.extend(
+                [
+                    meta.adapter_version,
+                    meta.payload_format,
+                    "" if meta.row_count is None else str(meta.row_count),
+                ]
+            )
+        table.add_row(*row)
+    print(table)
+
+
+@child_app.command("show")
+def child_show(
+    manifest_id: str,
+    stored_output_id: str,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--adapter-store-dir",
+            help="Base directory for adapter results (default: ~/.neurolab/data/adapter_outputs).",
+            path_type=Path,
+        ),
+    ] = None,
+):
+    """
+    Show metadata for one persisted parsed child record derived from a manifest.
+    """
+    roster_store = RosterStore()
+    resolved_id = _resolve_manifest_id(manifest_id, roster_store)
+    canonical_id = _canonical_manifest_id(resolved_id)
+    store = FileAdapterResultStore(base_dir=adapter_store_dir)
+    try:
+        meta = store.load_metadata(canonical_id, stored_output_id)
+    except StoredOutputNotFound as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=1) from err
+
+    table = Table(title=f"Child record {_short_id(meta.stored_output_id, 12)} (manifest {resolved_id})")
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="bold green")
+    table.add_row("stored_output_id", meta.stored_output_id)
+    table.add_row("manifest_id", meta.manifest_id)
+    table.add_row("artifact_id", meta.artifact_id)
+    table.add_row("adapter_name", meta.adapter_name)
+    table.add_row("adapter_version", meta.adapter_version)
+    table.add_row("dataset_type", meta.dataset_type)
+    table.add_row("pipeline_ordinal", str(meta.pipeline_ordinal))
+    table.add_row("payload_format", meta.payload_format)
+    table.add_row("payload_path", meta.payload_path)
+    table.add_row("row_count", "" if meta.row_count is None else str(meta.row_count))
+    table.add_row("shape_summary", "" if meta.shape_summary is None else json.dumps(meta.shape_summary, sort_keys=True))
+    print(table)
+    print("[bold]schema[/bold]")
+    print(json.dumps(meta.schema, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@child_app.command("payload")
+def child_payload(
+    manifest_id: str,
+    stored_output_id: str,
+    full: Annotated[
+        bool,
+        typer.Option("--full", help="Print full payload (arrays expanded)."),
+    ] = False,
+    head: Annotated[
+        int | None,
+        typer.Option("--head", help="When payload is a list, show only the first N elements."),
+    ] = None,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--adapter-store-dir",
+            help="Base directory for adapter results (default: ~/.neurolab/data/adapter_outputs).",
+            path_type=Path,
+        ),
+    ] = None,
+):
+    """
+    Display the reconstructed payload for one persisted parsed child record derived from a manifest.
+    """
+    roster_store = RosterStore()
+    resolved_id = _resolve_manifest_id(manifest_id, roster_store)
+    canonical_id = _canonical_manifest_id(resolved_id)
+    store = FileAdapterResultStore(base_dir=adapter_store_dir)
+    try:
+        payload = store.load_payload(canonical_id, stored_output_id)
+    except StoredOutputNotFound as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=1) from err
+
+    if head is not None and isinstance(payload, list):
+        payload = payload[: max(0, int(head))]
+
+    rendered = _render_payload_for_display(payload, full=full)
+    print(json.dumps(rendered, indent=2, sort_keys=True, ensure_ascii=False))
 
 
 @app.command()
@@ -376,7 +605,13 @@ def diff(
 
 
 @app.command()
-def show(manifest_id: str):
+def show(
+    manifest_id: str,
+    long: Annotated[
+        bool,
+        typer.Option("--long", help="Show artifact details."),
+    ] = False,
+):
     """
     Show summary information for a stored manifest.
     """
@@ -400,3 +635,75 @@ def show(manifest_id: str):
     table.add_row("Warnings", str(len(manifest.warnings)))
 
     print(table)
+
+    if not long:
+        return
+
+    # Artifact detail table
+    art_table = Table(title="Artifacts")
+    art_table.add_column("Path", style="cyan")
+    art_table.add_column("Size", justify="right")
+    art_table.add_column("Media Type", style="green")
+    art_table.add_column("Hash", style="dim")
+
+    for artifact in manifest.artifacts:
+        art_table.add_row(
+            artifact.relative_path,
+            str(artifact.size_bytes),
+            artifact.media_type or "-",
+            artifact.content_hash[:12] + "...",
+        )
+
+    print()
+    print(art_table)
+
+
+@app.command()
+def parse(
+    manifest_id: str,
+    store_outputs: Annotated[
+        bool,
+        typer.Option("--store-outputs", help="Persist adapter outputs to the adapter result store."),
+    ] = False,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--adapter-store-dir",
+            help="Base directory for adapter results (default: ~/.neurolab/data/adapter_outputs).",
+            path_type=Path,
+        ),
+    ] = None,
+):
+    """
+    Run the adapter pipeline on a stored manifest and show a summary of outputs and skips.
+    """
+    store = FileManifestStore()
+    roster_store = RosterStore()
+    resolved_id = _resolve_manifest_id(manifest_id, roster_store)
+
+    try:
+        manifest = store.load(resolved_id)
+    except FileNotFoundError as err:
+        print(f"[red]Manifest {manifest_id} not found.[/red]")
+        raise typer.Exit(code=1) from err
+
+    pipeline = AdapterPipeline()
+    result = pipeline.process_manifest(manifest)
+
+    # Adapter usage counts (outputs per adapter_name)
+    adapter_counts: dict[str, int] = {}
+    for out in result.outputs:
+        adapter_counts[out.adapter_name] = adapter_counts.get(out.adapter_name, 0) + 1
+
+    manifest_display = resolved_id if len(resolved_id) <= 12 else f"{resolved_id[:8]}..."
+    print(f"Manifest: {manifest_display}")
+    print(f"Artifacts processed: {len(manifest.artifacts)}")
+    print("Adapters used:")
+    for name, count in sorted(adapter_counts.items()):
+        print(f"  {name}: {count}")
+    print(f"Outputs generated: {len(result.outputs)} datasets")
+    print(f"Skipped artifacts: {len(result.skipped_artifacts)}")
+    if store_outputs:
+        ar_store = FileAdapterResultStore(base_dir=adapter_store_dir)
+        saved = ar_store.save_pipeline_result(manifest, result)
+        print(f"Stored {len(saved)} adapter output record(s) under manifest {resolved_id}.")
