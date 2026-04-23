@@ -270,6 +270,121 @@ def test_children_delete_yes(cli_env, tmp_path):
     assert "Deleted" in result.output
 
 
+# --- hub ---
+
+
+@pytest.mark.unit
+def test_hub_list_lists_records(cli_env, tmp_path):
+    sid = _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
+    hub_dir = tmp_path / "adapter_outputs"
+    result = runner.invoke(app, ["hub", "list", "--hub-dir", str(hub_dir)])
+    assert result.exit_code == 0
+    assert "Analysis Hub Records" in result.output
+    assert sid[:12] in result.output
+    assert "mid-1" in result.output
+    assert "art-1" in result.output
+    assert "t" in result.output
+
+
+@pytest.mark.unit
+def test_hub_list_honors_filters_and_limit(cli_env, tmp_path):
+    _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
+    _save_child_record(tmp_path, "mid-2", payload=[{"a": 2}])
+    hub_dir = tmp_path / "adapter_outputs"
+
+    filtered = runner.invoke(app, ["hub", "list", "--hub-dir", str(hub_dir), "--manifest-id", "mid-2"])
+    assert filtered.exit_code == 0
+    assert "mid-2" in filtered.output
+    assert "mid-1" not in filtered.output
+
+    limited = runner.invoke(app, ["hub", "list", "--hub-dir", str(hub_dir), "--limit", "1"])
+    assert limited.exit_code == 0
+    # Header appears; only one record row should include one of the manifest ids.
+    assert ("mid-1" in limited.output) ^ ("mid-2" in limited.output)
+
+
+@pytest.mark.unit
+def test_hub_list_long_includes_extra_fields(cli_env, tmp_path):
+    _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
+    hub_dir = tmp_path / "adapter_outputs"
+    short = runner.invoke(app, ["hub", "list", "--hub-dir", str(hub_dir)])
+    assert short.exit_code == 0
+
+    long = runner.invoke(app, ["hub", "list", "--hub-dir", str(hub_dir), "--long"])
+    assert long.exit_code == 0
+
+    def _top_border_sep_count(s: str) -> int:
+        for line in s.splitlines():
+            if line.startswith("┏"):
+                return line.count("┳")
+        return 0
+
+    # --long adds columns; Rich's top border should have more separators.
+    assert _top_border_sep_count(long.output) > _top_border_sep_count(short.output)
+
+
+@pytest.mark.unit
+def test_hub_show_valid_and_invalid(cli_env, tmp_path):
+    sid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+    hub_dir = tmp_path / "adapter_outputs"
+    ok = runner.invoke(app, ["hub", "show", "--hub-dir", str(hub_dir), sid])
+    assert ok.exit_code == 0
+    assert "stored_output_id" in ok.output
+    assert "schema" in ok.output
+    assert '"k": 1' in ok.output
+    assert "schema_fingerprint" in ok.output
+
+    bad = runner.invoke(app, ["hub", "show", "--hub-dir", str(hub_dir), "0" * 64])
+    assert bad.exit_code == 1
+    assert "Stored output not found" in bad.output
+
+
+@pytest.mark.unit
+def test_hub_count_summarizes(cli_env, tmp_path):
+    _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
+    _save_child_record(tmp_path, "mid-1", payload=[{"a": 2}])
+    _save_child_record(tmp_path, "mid-2", payload=[{"a": 3}])
+
+    hub_dir = tmp_path / "adapter_outputs"
+    result = runner.invoke(app, ["hub", "count", "--hub-dir", str(hub_dir)])
+    assert result.exit_code == 0
+    assert "Total records" in result.output
+    assert "Counts by adapter_name" in result.output
+    assert "Counts by dataset_type" in result.output
+
+
+@pytest.mark.unit
+def test_hub_load_summary_and_json(cli_env, tmp_path):
+    sid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+    hub_dir = tmp_path / "adapter_outputs"
+    result = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), sid])
+    assert result.exit_code == 0
+    assert "Loaded payload" in result.output
+    assert "python_type" in result.output
+
+    result_json = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), sid, "--json"])
+    assert result_json.exit_code == 0
+    assert '"x": 1' in result_json.output
+
+    bad = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), "0" * 64])
+    assert bad.exit_code == 1
+    assert "Stored output not found" in bad.output
+
+
+@pytest.mark.unit
+def test_hub_schemas_groups(cli_env, tmp_path):
+    _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
+    _save_child_record(tmp_path, "mid-1", payload=[{"a": 2}])
+    hub_dir = tmp_path / "adapter_outputs"
+    result = runner.invoke(app, ["hub", "schemas", "--hub-dir", str(hub_dir)])
+    assert result.exit_code == 0
+    assert "Schemas in Analysis Hub" in result.output
+    assert "schema_fingerprint" in result.output
+
+    result_long = runner.invoke(app, ["hub", "schemas", "--hub-dir", str(hub_dir), "--long"])
+    assert result_long.exit_code == 0
+    assert "schema_preview" in result_long.output or "schema" in result_long.output
+
 # --- diff ---
 
 

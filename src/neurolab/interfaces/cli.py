@@ -9,10 +9,12 @@ from rich import print
 from rich.table import Table
 
 from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipeline
+from neurolab.analysis_hub import FileSystemAnalysisHub, MetadataLoadError, MetadataRecordNotFoundError, PayloadNotFoundError
 from neurolab.data_interface.models import DataSourceSpec
 from neurolab.data_interface.orchestrator import collect_source
 from neurolab.storage.adapter_results import FileAdapterResultStore
 from neurolab.storage.adapter_results.errors import StoredOutputNotFound
+from neurolab.storage.adapter_results.ids import canonical_json, schema_fingerprint
 from neurolab.storage.manifest_store import FileManifestStore
 from neurolab.storage.roster_store import RosterStore
 
@@ -22,6 +24,9 @@ app.add_typer(roster_app, name="roster")
 
 child_app = typer.Typer(help="Inspect persisted parsed child records derived from a manifest.")
 app.add_typer(child_app, name="child")
+
+hub_app = typer.Typer(help="Browse Analysis Hub registry of persisted parsed outputs.")
+app.add_typer(hub_app, name="hub")
 
 
 @app.callback()
@@ -78,6 +83,42 @@ def _render_payload_for_display(obj: Any, *, full: bool) -> Any:
     if isinstance(obj, list):
         return [_render_payload_for_display(v, full=full) for v in obj]
     return obj
+
+
+def _build_analysis_hub(*, hub_dir: Path | None, adapter_store_dir: Path | None) -> FileSystemAnalysisHub:
+    """
+    Construct the Analysis Hub.
+
+    `hub_dir` and `adapter_store_dir` are aliases for the same base directory:
+    ~/.neurolab/data/adapter_outputs by default.
+    """
+
+    if hub_dir is not None and adapter_store_dir is not None and hub_dir != adapter_store_dir:
+        print("[red]Conflicting hub directory options: --hub-dir and --adapter-store-dir differ.[/red]")
+        raise typer.Exit(code=2)
+
+    base_dir = hub_dir if hub_dir is not None else adapter_store_dir
+    try:
+        return FileSystemAnalysisHub(base_dir=base_dir)
+    except MetadataLoadError as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=1) from err
+
+
+def _hub_filter_records(
+    hub: FileSystemAnalysisHub,
+    *,
+    manifest_id: str | None,
+    artifact_id: str | None,
+    adapter_name: str | None,
+    dataset_type: str | None,
+):
+    return hub.find_records(
+        manifest_id=manifest_id,
+        artifact_id=artifact_id,
+        adapter_name=adapter_name,
+        dataset_type=dataset_type,
+    )
 
 
 @app.command()
@@ -258,6 +299,268 @@ def child_payload(
 
     rendered = _render_payload_for_display(payload, full=full)
     print(json.dumps(rendered, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@hub_app.command("list")
+def hub_list(
+    manifest_id: Annotated[str | None, typer.Option("--manifest-id", help="Filter by manifest_id.")] = None,
+    artifact_id: Annotated[str | None, typer.Option("--artifact-id", help="Filter by artifact_id.")] = None,
+    adapter_name: Annotated[str | None, typer.Option("--adapter-name", help="Filter by adapter_name.")] = None,
+    dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
+    limit: Annotated[int | None, typer.Option("--limit", help="Show only the first N records after filtering.")] = None,
+    long: Annotated[bool, typer.Option("--long", help="Include additional metadata columns.")] = False,
+    hub_dir: Annotated[
+        Path | None,
+        typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
+    ] = None,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--adapter-store-dir",
+            help="Alias for --hub-dir (default: ~/.neurolab/data/adapter_outputs).",
+            path_type=Path,
+        ),
+    ] = None,
+):
+    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    records = _hub_filter_records(hub, manifest_id=manifest_id, artifact_id=artifact_id, adapter_name=adapter_name, dataset_type=dataset_type)
+    if limit is not None:
+        records = records[: max(0, int(limit))]
+
+    table = Table(title="Analysis Hub Records")
+    table.add_column("Stored Output ID", style="cyan", no_wrap=True)
+    table.add_column("Manifest ID", style="green", no_wrap=True)
+    table.add_column("Artifact ID", style="green", no_wrap=True)
+    table.add_column("Adapter", style="bold")
+    table.add_column("Dataset Type")
+    table.add_column("Row Count", justify="right", style="dim")
+    table.add_column("Shape Summary", style="dim")
+    if long:
+        table.add_column("Adapter Ver", style="dim")
+        table.add_column("Ordinal", justify="right", style="dim")
+        table.add_column("Payload Format", style="dim")
+        table.add_column("Payload Path", style="dim")
+
+    for r in records:
+        row = [
+            _short_id(r.stored_output_id, 12),
+            _short_id(r.manifest_id, 12),
+            r.artifact_id,
+            r.adapter_name,
+            r.dataset_type,
+            "" if r.row_count is None else str(r.row_count),
+            "" if r.shape_summary is None else json.dumps(r.shape_summary, sort_keys=True, ensure_ascii=False),
+        ]
+        if long:
+            row.extend([r.adapter_version, str(r.pipeline_ordinal), r.payload_format, r.payload_path])
+        table.add_row(*row)
+    print(table)
+
+
+@hub_app.command("show")
+def hub_show(
+    stored_output_id: Annotated[str, typer.Argument(help="stored_output_id of the record to display.")],
+    hub_dir: Annotated[
+        Path | None,
+        typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
+    ] = None,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
+    ] = None,
+):
+    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    try:
+        r = hub.get_record(stored_output_id)
+    except MetadataRecordNotFoundError as err:
+        print(f"[red]Stored output not found: {stored_output_id}[/red]")
+        raise typer.Exit(code=1) from err
+
+    fp = schema_fingerprint(r.schema)
+
+    table = Table(title=f"Hub record {_short_id(r.stored_output_id, 12)}")
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="bold green")
+
+    table.add_row("stored_output_id", r.stored_output_id)
+    table.add_row("manifest_id", r.manifest_id)
+    table.add_row("artifact_id", r.artifact_id)
+    table.add_row("adapter_name", r.adapter_name)
+    table.add_row("adapter_version", r.adapter_version)
+    table.add_row("dataset_type", r.dataset_type)
+    table.add_row("pipeline_ordinal", str(r.pipeline_ordinal))
+    table.add_row("payload_format", r.payload_format)
+    table.add_row("payload_path", r.payload_path)
+    table.add_row("row_count", "" if r.row_count is None else str(r.row_count))
+    table.add_row("shape_summary", "" if r.shape_summary is None else json.dumps(r.shape_summary, sort_keys=True, ensure_ascii=False))
+    table.add_row("schema_fingerprint", fp)
+    print(table)
+
+    print("[bold]schema[/bold]")
+    print(json.dumps(r.schema, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@hub_app.command("count")
+def hub_count(
+    manifest_id: Annotated[str | None, typer.Option("--manifest-id", help="Filter by manifest_id.")] = None,
+    artifact_id: Annotated[str | None, typer.Option("--artifact-id", help="Filter by artifact_id.")] = None,
+    adapter_name: Annotated[str | None, typer.Option("--adapter-name", help="Filter by adapter_name.")] = None,
+    dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
+    hub_dir: Annotated[
+        Path | None,
+        typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
+    ] = None,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
+    ] = None,
+):
+    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    records = _hub_filter_records(hub, manifest_id=manifest_id, artifact_id=artifact_id, adapter_name=adapter_name, dataset_type=dataset_type)
+
+    adapter_counts: dict[str, int] = {}
+    dataset_counts: dict[str, int] = {}
+    manifests: set[str] = set()
+    artifacts: set[str] = set()
+    with_row_count = 0
+    with_shape_summary = 0
+
+    for r in records:
+        adapter_counts[r.adapter_name] = adapter_counts.get(r.adapter_name, 0) + 1
+        dataset_counts[r.dataset_type] = dataset_counts.get(r.dataset_type, 0) + 1
+        manifests.add(r.manifest_id)
+        artifacts.add(r.artifact_id)
+        if r.row_count is not None:
+            with_row_count += 1
+        if r.shape_summary is not None:
+            with_shape_summary += 1
+
+    summary = Table(title="Analysis Hub Count Summary")
+    summary.add_column("Metric", style="bold cyan")
+    summary.add_column("Value", style="bold green", justify="right")
+    summary.add_row("Total records", str(len(records)))
+    summary.add_row("Distinct manifests", str(len(manifests)))
+    summary.add_row("Distinct artifacts", str(len(artifacts)))
+    summary.add_row("With row_count", str(with_row_count))
+    summary.add_row("With shape_summary", str(with_shape_summary))
+    print(summary)
+
+    if adapter_counts:
+        t = Table(title="Counts by adapter_name")
+        t.add_column("adapter_name", style="bold")
+        t.add_column("count", justify="right")
+        for k in sorted(adapter_counts):
+            t.add_row(k, str(adapter_counts[k]))
+        print(t)
+
+    if dataset_counts:
+        t = Table(title="Counts by dataset_type")
+        t.add_column("dataset_type", style="bold")
+        t.add_column("count", justify="right")
+        for k in sorted(dataset_counts):
+            t.add_row(k, str(dataset_counts[k]))
+        print(t)
+
+
+@hub_app.command("load")
+def hub_load(
+    stored_output_id: Annotated[str, typer.Argument(help="stored_output_id of the record to load.")],
+    json_out: Annotated[bool, typer.Option("--json", help="Print decoded payload as JSON (may be large).")] = False,
+    summary_only: Annotated[bool, typer.Option("--summary-only", help="Print only a summary (default behavior).")] = True,
+    hub_dir: Annotated[
+        Path | None,
+        typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
+    ] = None,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
+    ] = None,
+):
+    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    try:
+        h = hub.open_handle(stored_output_id)
+    except MetadataRecordNotFoundError as err:
+        print(f"[red]Stored output not found: {stored_output_id}[/red]")
+        raise typer.Exit(code=1) from err
+
+    try:
+        payload = h.load()
+    except PayloadNotFoundError as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=1) from err
+
+    r = h.metadata
+    payload_type = type(payload).__name__
+    keys = list(payload.keys()) if isinstance(payload, dict) else None
+    n_items = len(payload) if isinstance(payload, list) else None
+
+    table = Table(title=f"Loaded payload for {_short_id(r.stored_output_id, 12)}")
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="bold green")
+    table.add_row("stored_output_id", r.stored_output_id)
+    table.add_row("python_type", payload_type)
+    if keys is not None:
+        table.add_row("top_level_keys", ", ".join([str(k) for k in keys[:20]]) + ("" if len(keys) <= 20 else ", ..."))
+    if n_items is not None:
+        table.add_row("list_length", str(n_items))
+    table.add_row("row_count", "" if r.row_count is None else str(r.row_count))
+    table.add_row("shape_summary", "" if r.shape_summary is None else json.dumps(r.shape_summary, sort_keys=True, ensure_ascii=False))
+    print(table)
+
+    if summary_only and not json_out:
+        return
+
+    if json_out:
+        rendered = _render_payload_for_display(payload, full=True)
+        print(json.dumps(rendered, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@hub_app.command("schemas")
+def hub_schemas(
+    manifest_id: Annotated[str | None, typer.Option("--manifest-id", help="Filter by manifest_id.")] = None,
+    artifact_id: Annotated[str | None, typer.Option("--artifact-id", help="Filter by artifact_id.")] = None,
+    adapter_name: Annotated[str | None, typer.Option("--adapter-name", help="Filter by adapter_name.")] = None,
+    dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
+    long: Annotated[bool, typer.Option("--long", help="Include an example id and schema preview.")] = False,
+    hub_dir: Annotated[
+        Path | None,
+        typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
+    ] = None,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
+    ] = None,
+):
+    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    records = _hub_filter_records(hub, manifest_id=manifest_id, artifact_id=artifact_id, adapter_name=adapter_name, dataset_type=dataset_type)
+
+    groups: dict[tuple[str, str, str], list] = {}
+    for r in records:
+        fp = schema_fingerprint(r.schema)
+        key = (r.adapter_name, r.dataset_type, fp)
+        groups.setdefault(key, []).append(r)
+
+    table = Table(title="Schemas in Analysis Hub")
+    table.add_column("adapter_name", style="bold")
+    table.add_column("dataset_type")
+    table.add_column("schema_fingerprint", style="cyan", no_wrap=True)
+    table.add_column("record_count", justify="right")
+    if long:
+        table.add_column("example_id", style="dim", no_wrap=True)
+        table.add_column("schema_preview", style="dim")
+
+    for (an, dt, fp) in sorted(groups.keys()):
+        rs = groups[(an, dt, fp)]
+        row = [an, dt, fp, str(len(rs))]
+        if long:
+            example = rs[0]
+            preview = canonical_json(example.schema)
+            if len(preview) > 200:
+                preview = preview[:200] + "..."
+            row.extend([_short_id(example.stored_output_id, 12), preview])
+        table.add_row(*row)
+
+    print(table)
 
 
 @app.command()
