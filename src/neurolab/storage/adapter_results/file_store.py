@@ -65,12 +65,12 @@ class FileAdapterResultStore:
 
         for ordinal, out in enumerate(result.outputs):
             sid = compute_stored_output_id(
-                manifest_id=manifest.manifest_id,
                 artifact_id=out.artifact_id,
                 adapter_name=out.adapter_name,
                 adapter_version=out.adapter_version,
                 dataset_type=out.dataset_type,
                 schema=out.schema,
+                adapter_config_hash=out.adapter_config_hash,
                 pipeline_ordinal=ordinal,
             )
             expected_ids.add(sid)

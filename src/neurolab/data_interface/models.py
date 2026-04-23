@@ -90,7 +90,8 @@ class Artifact:
         mtime: Last modified time (if applicable).
         content_hash: SHA-256 hash of contents for change detection (if applicable).
         media_type: MIME type (e.g., "text/csv") (if applicable).
-        artifact_id: Unique identifier (defaults to a UUID).
+        artifact_id: Stable identifier; filesystem collection uses a deterministic hash of
+            content_hash and relative_path (see neurolab.data_interface.hashing.hash_artifact_id).
         tags: Optional dictionary of additional metadata.
     """
 

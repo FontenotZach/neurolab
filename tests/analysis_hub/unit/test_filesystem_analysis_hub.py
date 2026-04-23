@@ -37,6 +37,7 @@ def test_scan_and_list_deterministic(tmp_path):
         dataset_type="tabular",
         schema={"k": 1},
         payload={"x": 1},
+        adapter_config_hash="cfg",
     )
     out_b = AdapterOutput(
         artifact_id="b",
@@ -45,6 +46,7 @@ def test_scan_and_list_deterministic(tmp_path):
         dataset_type="tabular",
         schema={"k": 2},
         payload={"x": 2},
+        adapter_config_hash="cfg",
     )
 
     store.save_pipeline_result(m2, AdapterPipelineResult(outputs=[out_b], skipped_artifacts=[]))
@@ -68,6 +70,7 @@ def test_find_records_filters_and_logic(tmp_path):
         dataset_type="tabular",
         schema={"k": 1},
         payload={"x": 1},
+        adapter_config_hash="cfg",
     )
     o2 = AdapterOutput(
         artifact_id="b",
@@ -76,6 +79,7 @@ def test_find_records_filters_and_logic(tmp_path):
         dataset_type="timeseries",
         schema={"k": 2},
         payload={"x": 2},
+        adapter_config_hash="cfg",
     )
     store.save_pipeline_result(m, AdapterPipelineResult(outputs=[o1, o2], skipped_artifacts=[]))
 
@@ -98,6 +102,7 @@ def test_open_handle_lazy_then_load_roundtrip(tmp_path):
         dataset_type="tabular",
         schema={"k": 1},
         payload=[{"a": 1}],
+        adapter_config_hash="cfg",
     )
     saved = store.save_pipeline_result(m, AdapterPipelineResult(outputs=[out], skipped_artifacts=[]))
     sid = saved[0].stored_output_id
@@ -136,6 +141,7 @@ def test_numpy_payload_roundtrip_if_available(tmp_path):
         dataset_type="timeseries",
         schema={"k": 1},
         payload={"signal": np.asarray([1.0, 2.0], dtype=np.float32)},
+        adapter_config_hash="cfg",
     )
     sid = store.save_pipeline_result(m, AdapterPipelineResult(outputs=[out], skipped_artifacts=[]))[0].stored_output_id
 

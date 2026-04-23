@@ -16,6 +16,9 @@ class AdapterOutput:
     Persistence (v1 codec): `schema` must be JSON-serializable (str keys, no NaN/Inf, no exotic types).
     `payload` may use None, bool, Python int/float (finite), str, list, dict[str, ...], and numpy.ndarray
     only as leaf values (see neurolab.storage.adapter_results.payload_codec). Pickle is not supported.
+
+    ``adapter_config_hash`` optional fingerprint of adapter-specific options; when set, it participates
+    in ``stored_output_id`` determinism.
     """
 
     artifact_id: str
@@ -24,3 +27,4 @@ class AdapterOutput:
     dataset_type: str
     schema: dict[str, Any]
     payload: Any
+    adapter_config_hash: str | None = None

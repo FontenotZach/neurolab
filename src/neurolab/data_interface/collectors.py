@@ -4,9 +4,8 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Protocol
-from uuid import uuid4
 
-from .hashing import hash_file_sha256, hash_manifest_id
+from .hashing import hash_artifact_id, hash_file_sha256, hash_manifest_id
 from .models import Artifact, DataSourceSpec, Manifest, utc_now
 
 
@@ -115,7 +114,12 @@ class FilesystemCollector:
 
             artifacts.append(
                 Artifact(
-                    artifact_id=str(uuid4()),
+                    artifact_id=hash_artifact_id(
+                        content_hash=content_hash,
+                        relative_path=rel_path,
+                        absolute_path=abs_path,
+                        size_bytes=size_bytes,
+                    ),
                     source_uri=source.uri,
                     artifact_type="file",
                     relative_path=rel_path,

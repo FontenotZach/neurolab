@@ -65,6 +65,7 @@ def _save_child_record(tmp_path, manifest_id: str, payload):
         dataset_type="tabular",
         schema={"k": 1},
         payload=payload,
+        adapter_config_hash="cfg-test",
     )
     saved = store.save_pipeline_result(m, AdapterPipelineResult(outputs=[out], skipped_artifacts=[]))
     return saved[0].stored_output_id

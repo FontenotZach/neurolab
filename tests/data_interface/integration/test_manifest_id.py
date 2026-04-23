@@ -24,6 +24,9 @@ def test_manifest_id_stable_across_collects(project_test_data_dir):
 
     assert manifest1.manifest_id == manifest2.manifest_id
     assert len(manifest1.artifacts) == len(manifest2.artifacts)
+    ids1 = sorted(a.artifact_id for a in manifest1.artifacts)
+    ids2 = sorted(a.artifact_id for a in manifest2.artifacts)
+    assert ids1 == ids2
 
 
 @pytest.mark.integration
@@ -38,6 +41,7 @@ def test_manifest_id_deterministic_for_session(project_test_data_dir):
     manifest2 = collect_source(source)
 
     assert manifest1.manifest_id == manifest2.manifest_id
+    assert sorted(a.artifact_id for a in manifest1.artifacts) == sorted(a.artifact_id for a in manifest2.artifacts)
 
 
 @pytest.mark.integration

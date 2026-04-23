@@ -4,7 +4,12 @@ from __future__ import annotations
 
 from neurolab.storage.adapter_results.errors import PayloadDecodeError, PayloadEncodeError, StoredOutputNotFound
 from neurolab.storage.adapter_results.file_store import FileAdapterResultStore
-from neurolab.storage.adapter_results.ids import canonical_json, compute_stored_output_id, schema_fingerprint
+from neurolab.storage.adapter_results.ids import (
+    StoredOutputIdentityWarning,
+    canonical_json,
+    compute_stored_output_id,
+    schema_fingerprint,
+)
 from neurolab.storage.adapter_results.models import PAYLOAD_FORMAT_V1, PRIMARY_PAYLOAD_REL_PATH, PersistedAdapterOutput
 from neurolab.storage.adapter_results.payload_codec import (
     NEUROLAB_PAYLOAD_ARRAY_PORTAL_V1,
@@ -23,6 +28,7 @@ __all__ = [
     "PersistedAdapterOutput",
     "PayloadDecodeError",
     "PayloadEncodeError",
+    "StoredOutputIdentityWarning",
     "StoredOutputNotFound",
     "canonical_json",
     "compute_stored_output_id",
