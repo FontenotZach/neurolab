@@ -19,5 +19,5 @@ wheels/
 # Windows NTFS alternate stream metadata from copied files
 *:Zone.Identifier
 
-# Local Neuralynx CSC dumps at repo root of test_data (large; do not commit)
-test_data/CSC*.ncs
+# Local test datasets (not version-controlled; integration tests skip if absent)
+test_data/
