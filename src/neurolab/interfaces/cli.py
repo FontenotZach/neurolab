@@ -12,6 +12,8 @@ from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipeline
 from neurolab.analysis_hub import FileSystemAnalysisHub, MetadataLoadError, MetadataRecordNotFoundError, PayloadNotFoundError
 from neurolab.data_interface.models import DataSourceSpec
 from neurolab.data_interface.orchestrator import collect_source
+from neurolab.output_groups.builders.neuralynx_csc import NeuralynxCSCGroupRequest, NeuralynxCSCOutputGroupBuilder
+from neurolab.output_groups.store import FileOutputGroupCatalogStore
 from neurolab.storage.adapter_results import FileAdapterResultStore
 from neurolab.storage.adapter_results.errors import StoredOutputNotFound
 from neurolab.storage.adapter_results.ids import canonical_json, schema_fingerprint
@@ -27,6 +29,9 @@ app.add_typer(child_app, name="child")
 
 hub_app = typer.Typer(help="Browse Analysis Hub registry of persisted parsed outputs.")
 app.add_typer(hub_app, name="hub")
+
+groups_app = typer.Typer(help="Build and browse OutputGroups derived from hub metadata.")
+app.add_typer(groups_app, name="groups")
 
 
 @app.callback()
@@ -602,6 +607,225 @@ def hub_schemas(
         table.add_row(*row)
 
     print(table)
+
+
+def _groups_builder_registry() -> dict[str, object]:
+    # Kept local to CLI for now; grows as we add builders.
+    return {
+        "neuralynx_csc": NeuralynxCSCOutputGroupBuilder(),
+    }
+
+
+@groups_app.command("build")
+def groups_build(
+    builder: Annotated[str, typer.Option("--builder", help="OutputGroup builder name (e.g. neuralynx_csc).")],
+    store_dir: Annotated[
+        Path,
+        typer.Option(
+            "--store-dir",
+            help="Root directory for OutputGroup catalog store (required). Store writes output_groups/catalog.json under this root.",
+            path_type=Path,
+        ),
+    ],
+    hub_dir: Annotated[
+        Path | None,
+        typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
+    ] = None,
+    adapter_store_dir: Annotated[
+        Path | None,
+        typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
+    ] = None,
+    min_csc_files_per_experiment: Annotated[
+        int,
+        typer.Option("--min-csc-files-per-experiment", help="Minimum number of CSC files required to form an experiment folder."),
+    ] = 2,
+    include_incomplete_tetrodes: Annotated[
+        bool,
+        typer.Option("--include-incomplete-tetrodes", help="Include incomplete tetrodes (currently not implemented)."),
+    ] = False,
+):
+    """
+    Build OutputGroups from hub metadata and merge them into the persisted catalog.
+    """
+    reg = _groups_builder_registry()
+    b = reg.get(builder)
+    if b is None:
+        print(f"[red]Unknown builder: {builder!r}. Supported: {sorted(reg.keys())}[/red]")
+        raise typer.Exit(code=2)
+
+    store = FileOutputGroupCatalogStore(store_dir)
+    catalog = store.load()
+
+    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+
+    try:
+        if isinstance(b, NeuralynxCSCOutputGroupBuilder):
+            req = NeuralynxCSCGroupRequest(
+                min_csc_files_per_experiment=int(min_csc_files_per_experiment),
+                include_incomplete_tetrodes=bool(include_incomplete_tetrodes),
+            )
+            new_groups = b.build(hub, req)
+        else:  # pragma: no cover - registry only contains known builders for now
+            raise ValueError(f"Unhandled builder type: {type(b)!r}")
+    except NotImplementedError as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=1) from err
+
+    try:
+        catalog.add_many(new_groups)
+    except ValueError as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=1) from err
+
+    store.save(catalog)
+
+    roots = catalog.roots()
+    print(f"[green]Added {len(new_groups)} group(s).[/green]")
+    print(f"Catalog total: {len(catalog)} group(s), {len(roots)} root group(s).")
+
+
+@groups_app.command("list")
+def groups_list(
+    store_dir: Annotated[
+        Path,
+        typer.Option(
+            "--store-dir",
+            help="Root directory for OutputGroup catalog store (required).",
+            path_type=Path,
+        ),
+    ],
+):
+    """List groups from the persisted catalog."""
+    store = FileOutputGroupCatalogStore(store_dir)
+    catalog = store.load()
+
+    table = Table(title="OutputGroups")
+    table.add_column("group_id", style="cyan", no_wrap=True)
+    table.add_column("group_type", style="bold")
+    table.add_column("n_members", justify="right", style="dim")
+    table.add_column("parent_group_id", style="dim")
+
+    for g in catalog.list():
+        table.add_row(
+            g.group_id,
+            g.group_type,
+            str(len(g.member_provenance_ids)),
+            "" if g.parent_group_id is None else g.parent_group_id,
+        )
+
+    print(table)
+
+
+@groups_app.command("show")
+def groups_show(
+    group_id: Annotated[str, typer.Argument(help="group_id of the OutputGroup to display.")],
+    store_dir: Annotated[
+        Path,
+        typer.Option(
+            "--store-dir",
+            help="Root directory for OutputGroup catalog store (required).",
+            path_type=Path,
+        ),
+    ],
+):
+    """Show one OutputGroup from the persisted catalog."""
+    store = FileOutputGroupCatalogStore(store_dir)
+    catalog = store.load()
+    try:
+        g = catalog.get(group_id)
+    except KeyError:
+        print(f"[red]Group not found: {group_id}[/red]")
+        raise typer.Exit(code=1) from None
+
+    table = Table(title=f"OutputGroup {g.group_id}")
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="bold green")
+    table.add_row("group_id", g.group_id)
+    table.add_row("group_type", g.group_type)
+    table.add_row("parent_group_id", "" if g.parent_group_id is None else g.parent_group_id)
+    table.add_row("label", "" if g.label is None else g.label)
+    table.add_row("n_members", str(len(g.member_provenance_ids)))
+    print(table)
+
+    print("[bold]member_provenance_ids[/bold]")
+    print(json.dumps(list(g.member_provenance_ids), indent=2, sort_keys=True, ensure_ascii=False))
+    print("[bold]metadata[/bold]")
+    print(json.dumps(g.metadata, indent=2, sort_keys=True, ensure_ascii=False))
+
+
+@groups_app.command("roots")
+def groups_roots(
+    store_dir: Annotated[
+        Path,
+        typer.Option(
+            "--store-dir",
+            help="Root directory for OutputGroup catalog store (required).",
+            path_type=Path,
+        ),
+    ],
+):
+    """List root groups (parent_group_id is None)."""
+    store = FileOutputGroupCatalogStore(store_dir)
+    catalog = store.load()
+
+    table = Table(title="OutputGroup Roots")
+    table.add_column("group_id", style="cyan", no_wrap=True)
+    table.add_column("group_type", style="bold")
+    table.add_column("n_members", justify="right", style="dim")
+
+    for g in catalog.roots():
+        table.add_row(g.group_id, g.group_type, str(len(g.member_provenance_ids)))
+
+    print(table)
+
+
+@groups_app.command("children")
+def groups_children(
+    group_id: Annotated[str, typer.Argument(help="Parent group_id to list children for.")],
+    store_dir: Annotated[
+        Path,
+        typer.Option(
+            "--store-dir",
+            help="Root directory for OutputGroup catalog store (required).",
+            path_type=Path,
+        ),
+    ],
+):
+    """List children groups whose parent_group_id equals the given group_id."""
+    store = FileOutputGroupCatalogStore(store_dir)
+    catalog = store.load()
+    kids = catalog.children_of(group_id)
+
+    table = Table(title=f"Children of {group_id}")
+    table.add_column("group_id", style="cyan", no_wrap=True)
+    table.add_column("group_type", style="bold")
+    table.add_column("n_members", justify="right", style="dim")
+
+    for g in kids:
+        table.add_row(g.group_id, g.group_type, str(len(g.member_provenance_ids)))
+
+    print(table)
+
+
+@groups_app.command("delete")
+def groups_delete(
+    store_dir: Annotated[
+        Path,
+        typer.Option(
+            "--store-dir",
+            help="Root directory for OutputGroup catalog store (required).",
+            path_type=Path,
+        ),
+    ],
+):
+    """Delete the persisted OutputGroup catalog file, if present."""
+    store = FileOutputGroupCatalogStore(store_dir)
+    existed = store.exists()
+    store.delete()
+    if existed:
+        print("[green]Deleted OutputGroup catalog.[/green]")
+    else:
+        print("[yellow]No OutputGroup catalog found (nothing to delete).[/yellow]")
 
 
 @app.command()

@@ -6,6 +6,7 @@ Covers collect, history, show, info, diff, delete, clear, and parse.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
@@ -14,6 +15,8 @@ from neurolab.adapters.core.output import AdapterOutput
 from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipelineResult
 from neurolab.data_interface.models import Artifact, DataSourceSpec, Manifest
 from neurolab.interfaces.cli import app
+from neurolab.output_groups import OutputGroup, OutputGroupCatalog
+from neurolab.output_groups.store import FileOutputGroupCatalogStore
 from neurolab.storage.adapter_results.file_store import FileAdapterResultStore
 from neurolab.storage.manifest_store import FileManifestStore
 from neurolab.storage.roster_store import RosterStore
@@ -112,6 +115,49 @@ def _save_two_children_same_manifest(tmp_path, manifest_id: str):
         payload=[{"a": 2}],
     )
     store.save_pipeline_result(m, AdapterPipelineResult(outputs=[o1, o2], skipped_artifacts=[]))
+
+
+def _write_groups_catalog(tmp_path) -> tuple[Path, OutputGroupCatalog]:
+    store_dir = tmp_path / "group_store"
+    store = FileOutputGroupCatalogStore(store_dir)
+    a = OutputGroup(group_id="group:a", group_type="type_a", member_provenance_ids=("p1",), parent_group_id=None)
+    b = OutputGroup(group_id="group:b", group_type="type_b", member_provenance_ids=("p2",), parent_group_id="group:a")
+    c = OutputGroup(group_id="group:c", group_type="type_a", member_provenance_ids=("p3",), parent_group_id="group:a")
+    catalog = OutputGroupCatalog([a, b, c])
+    store.save(catalog)
+    return store_dir, catalog
+
+
+def test_groups_list_and_show(cli_env) -> None:
+    store_dir, _ = _write_groups_catalog(cli_env)
+    result_list = runner.invoke(app, ["groups", "list", "--store-dir", str(store_dir)])
+    assert result_list.exit_code == 0
+    assert "group:a" in result_list.output
+
+    result_show = runner.invoke(app, ["groups", "show", "group:a", "--store-dir", str(store_dir)])
+    assert result_show.exit_code == 0
+    assert "OutputGroup group:a" in result_show.output
+
+
+def test_groups_roots_children_and_delete(cli_env) -> None:
+    store_dir, _ = _write_groups_catalog(cli_env)
+
+    result_roots = runner.invoke(app, ["groups", "roots", "--store-dir", str(store_dir)])
+    assert result_roots.exit_code == 0
+    assert "group:a" in result_roots.output
+
+    result_children = runner.invoke(app, ["groups", "children", "group:a", "--store-dir", str(store_dir)])
+    assert result_children.exit_code == 0
+    assert "group:b" in result_children.output
+    assert "group:c" in result_children.output
+
+    result_delete = runner.invoke(app, ["groups", "delete", "--store-dir", str(store_dir)])
+    assert result_delete.exit_code == 0
+    assert "Deleted OutputGroup catalog" in result_delete.output
+
+    result_delete_again = runner.invoke(app, ["groups", "delete", "--store-dir", str(store_dir)])
+    assert result_delete_again.exit_code == 0
+    assert "No OutputGroup catalog found" in result_delete_again.output
 
 
 @pytest.fixture()
