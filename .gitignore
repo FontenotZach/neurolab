@@ -12,3 +12,12 @@ wheels/
 # IDE files
 .vscode/
 .idea/
+
+# Local tool caches (e.g. pre-commit under repo)
+.cache/
+
+# Windows NTFS alternate stream metadata from copied files
+*:Zone.Identifier
+
+# Local Neuralynx CSC dumps at repo root of test_data (large; do not commit)
+test_data/CSC*.ncs
