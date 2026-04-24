@@ -436,6 +436,7 @@ def test_hub_schemas_groups(cli_env, tmp_path):
     assert result_long.exit_code == 0
     assert "schema_preview" in result_long.output or "schema" in result_long.output
 
+
 # --- diff ---
 
 

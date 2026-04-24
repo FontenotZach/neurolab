@@ -590,7 +590,7 @@ def hub_schemas(
         table.add_column("example_id", style="dim", no_wrap=True)
         table.add_column("schema_preview", style="dim")
 
-    for (an, dt, fp) in sorted(groups.keys()):
+    for an, dt, fp in sorted(groups.keys()):
         rs = groups[(an, dt, fp)]
         row = [an, dt, fp, str(len(rs))]
         if long:

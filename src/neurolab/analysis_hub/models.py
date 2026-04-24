@@ -63,6 +63,4 @@ class AnalysisHandle:
         try:
             return decode_payload_from_record(self.payload.record_dir)
         except (FileNotFoundError, PayloadDecodeError) as e:
-            raise PayloadNotFoundError(
-                f"Payload not found/decodable for provenance_id={self.metadata.provenance_id!r}"
-            ) from e
+            raise PayloadNotFoundError(f"Payload not found/decodable for provenance_id={self.metadata.provenance_id!r}") from e
