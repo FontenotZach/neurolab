@@ -8,7 +8,7 @@ class AnalysisHubError(Exception):
 
 
 class MetadataRecordNotFoundError(AnalysisHubError):
-    """Raised when a stored_output_id is not present in the hub registry."""
+    """Raised when a provenance_id is not present in the hub registry."""
 
 
 class PayloadNotFoundError(AnalysisHubError):

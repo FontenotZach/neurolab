@@ -1,85 +1,57 @@
-"""Deterministic IDs for stored adapter outputs."""
+"""Deterministic IDs for stored adapter outputs (payload-content identity)."""
 
 from __future__ import annotations
 
+import numpy as np
 import pytest
 
-from neurolab.storage.adapter_results.ids import (
-    StoredOutputIdentityWarning,
-    compute_stored_output_id,
-    schema_fingerprint,
-)
+from neurolab.storage.adapter_results.ids import compute_data_hash, compute_stored_output_id, schema_fingerprint
+from neurolab.storage.adapter_results.payload_codec import fingerprint_payload_content
 
 pytestmark = [pytest.mark.storage]
 
-BASE = dict(
-    artifact_id="a1",
-    adapter_name="csv_adapter",
-    adapter_version="1.0",
-    dataset_type="tabular",
-    schema={"columns": ["x"]},
-    adapter_config_hash="cfg-default",
-    pipeline_ordinal=0,
-)
+SAMPLE_PAYLOAD = [{"x": 1, "y": "a"}]
+
+
+@pytest.mark.unit
+def test_compute_data_hash_matches_deprecated_alias():
+    p = {"a": 1}
+    assert compute_data_hash(p) == compute_stored_output_id(p)
 
 
 @pytest.mark.unit
 def test_compute_stored_output_id_stable():
-    id1 = compute_stored_output_id(**BASE)
-    id2 = compute_stored_output_id(**BASE)
+    id1 = compute_stored_output_id(SAMPLE_PAYLOAD)
+    id2 = compute_stored_output_id(SAMPLE_PAYLOAD)
     assert id1 == id2
     assert len(id1) == 64
 
 
 @pytest.mark.unit
-def test_stored_output_id_depends_on_schema_fingerprint():
-    b2 = {**BASE, "schema": {"columns": ["y"]}}
-    assert compute_stored_output_id(**BASE) != compute_stored_output_id(**b2)
+def test_stored_output_id_same_for_equivalent_payload_shape():
+    assert compute_stored_output_id([{"b": 2, "a": 1}]) == compute_stored_output_id([{"a": 1, "b": 2}])
 
 
 @pytest.mark.unit
-def test_stored_output_id_depends_on_ordinal():
-    b2 = {**BASE, "pipeline_ordinal": 1}
-    assert compute_stored_output_id(**BASE) != compute_stored_output_id(**b2)
+def test_stored_output_id_ignores_adapter_provenance_not_in_payload():
+    """Same payload => same id; adapter metadata is not part of the payload tree."""
+    p = [{"n": 1}]
+    assert compute_stored_output_id(p) == fingerprint_payload_content(p)
+
+
+@pytest.mark.unit
+def test_stored_output_id_differs_when_payload_differs():
+    assert compute_stored_output_id([1, 2]) != compute_stored_output_id([1, 3])
+
+
+@pytest.mark.unit
+def test_stored_output_id_numpy_content():
+    a = np.array([1.0, 2.0], dtype=np.float32)
+    b = np.array([1.0, 2.0], dtype=np.float32)
+    assert compute_stored_output_id({"signal": a}) == compute_stored_output_id({"signal": b})
 
 
 @pytest.mark.unit
 def test_schema_fingerprint_stable():
     s = {"b": 1, "a": 2}
     assert schema_fingerprint(s) == schema_fingerprint({"a": 2, "b": 1})
-
-
-@pytest.mark.unit
-def test_missing_fields_warn_and_still_deterministic():
-    with pytest.warns(StoredOutputIdentityWarning) as record:
-        id1 = compute_stored_output_id()
-        id2 = compute_stored_output_id()
-    assert id1 == id2
-    assert len(record) >= 1
-
-
-@pytest.mark.unit
-def test_schema_fingerprint_key_matches_schema_fingerprint_function():
-    schema = {"k": 1}
-    expected_fp = schema_fingerprint(schema)
-    hid = compute_stored_output_id(
-        artifact_id="x",
-        adapter_name="a",
-        adapter_version="1",
-        dataset_type="tabular",
-        schema=schema,
-        adapter_config_hash="c",
-        pipeline_ordinal=0,
-    )
-    # Changing only schema fingerprint should change id
-    other = compute_stored_output_id(
-        artifact_id="x",
-        adapter_name="a",
-        adapter_version="1",
-        dataset_type="tabular",
-        schema={"k": 2},
-        adapter_config_hash="c",
-        pipeline_ordinal=0,
-    )
-    assert hid != other
-    assert expected_fp == schema_fingerprint(schema)

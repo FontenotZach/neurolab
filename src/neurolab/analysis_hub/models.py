@@ -15,26 +15,33 @@ class OutputMetadataRecord:
     """
     Metadata-only record for one persisted adapter output.
 
-    This mirrors the `meta.json` schema written by `PersistedAdapterOutput.to_dict()`.
+    Mirrors persisted ``meta.json`` (v2): ``data_hash`` for computational equivalence,
+    ``provenance_id`` for lineage and addressing records.
     """
 
-    stored_output_id: str
+    provenance_id: str
+    data_hash: str
     manifest_id: str
     artifact_id: str
+    raw_content_hash: str | None
     adapter_name: str
     adapter_version: str
+    adapter_config_hash: str | None
+    schema_fingerprint: str
     dataset_type: str
     pipeline_ordinal: int
     schema: dict[str, Any]
     payload_format: str
     payload_path: str
+    created_at: str
+    meta_schema_version: int | None = None
     row_count: int | None = None
     shape_summary: dict[str, list[int]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class PayloadDescriptor:
-    stored_output_id: str
+    provenance_id: str
     manifest_id: str
     record_dir: Path
     meta_json_path: Path
@@ -56,5 +63,6 @@ class AnalysisHandle:
         try:
             return decode_payload_from_record(self.payload.record_dir)
         except (FileNotFoundError, PayloadDecodeError) as e:
-            raise PayloadNotFoundError(f"Payload not found/decodable for stored_output_id={self.metadata.stored_output_id!r}") from e
-
+            raise PayloadNotFoundError(
+                f"Payload not found/decodable for provenance_id={self.metadata.provenance_id!r}"
+            ) from e

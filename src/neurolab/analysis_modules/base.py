@@ -17,7 +17,7 @@ class AnalysisModule(Protocol, Generic[RequestT, ResultT]):
 
     - `describe()` is pure informational metadata and must not touch the hub.
     - `select()` is metadata-only: it must not load payloads, and it must preserve
-      hub ordering in `SelectionResult.selected_stored_output_ids`.
+      hub ordering in `SelectionResult.selected_provenance_ids`.
     - `run()` performs the actual work and may load payloads via the hub.
     """
 
@@ -29,4 +29,3 @@ class AnalysisModule(Protocol, Generic[RequestT, ResultT]):
     def select(self, hub: AnalysisHub, request: RequestT) -> SelectionResult: ...
 
     def run(self, hub: AnalysisHub, request: RequestT) -> ResultT: ...
-

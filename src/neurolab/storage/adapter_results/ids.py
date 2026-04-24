@@ -1,15 +1,13 @@
-"""Deterministic identifiers for stored adapter outputs."""
+"""Deterministic identifiers for stored adapter outputs (data vs provenance)."""
 
 from __future__ import annotations
 
 import hashlib
 import json
-import warnings
+from pathlib import Path
 from typing import Any
 
-
-class StoredOutputIdentityWarning(UserWarning):
-    """Emitted when building stored_output_id with optional fields omitted."""
+from neurolab.data_interface.models import Artifact
 
 
 def canonical_json(obj: Any) -> str:
@@ -18,91 +16,55 @@ def canonical_json(obj: Any) -> str:
 
 
 def schema_fingerprint(schema: dict[str, Any]) -> str:
-    """SHA-256 hex digest of canonical JSON for `schema`. Schema is part of persisted identity."""
+    """SHA-256 hex digest of canonical JSON for ``schema`` (used in provenance_id)."""
     return hashlib.sha256(canonical_json(schema).encode("utf-8")).hexdigest()
 
 
-def compute_stored_output_id(
+def compute_data_hash(payload: Any) -> str:
+    """Pure content identity for standardized adapter payload (SHA-256 hex)."""
+    from neurolab.storage.adapter_results.payload_codec import fingerprint_payload_content
+
+    return fingerprint_payload_content(payload)
+
+
+def compute_stored_output_id(payload: Any) -> str:
+    """Deprecated alias for :func:`compute_data_hash`."""
+    return compute_data_hash(payload)
+
+
+def artifact_key_for_provenance(artifact: Artifact) -> str | None:
+    """Stable path key aligned with filesystem collector semantics."""
+    if artifact.relative_path:
+        return artifact.relative_path
+    if artifact.absolute_path:
+        return str(Path(artifact.absolute_path).name)
+    return None
+
+
+def compute_provenance_id(
     *,
-    artifact_id: str | None = None,
-    adapter_name: str | None = None,
-    adapter_version: str | None = None,
-    dataset_type: str | None = None,
-    schema: dict[str, Any] | None = None,
-    adapter_config_hash: str | None = None,
-    pipeline_ordinal: int | None = None,
+    manifest_id: str,
+    artifact_key: str | None,
+    raw_content_hash: str | None,
+    adapter_name: str,
+    adapter_version: str,
+    adapter_config_hash: str | None,
+    schema_fingerprint: str,
+    pipeline_ordinal: int,
 ) -> str:
     """
-    Derive stored_output_id from a canonical JSON object (sorted keys), then SHA-256 hex.
+    Lineage identity: SHA-256 hex of canonical provenance object.
 
-    Only keys with non-missing values are included. A field is "missing" if its value
-    is ``None`` (``pipeline_ordinal`` may be ``0``). Each omitted optional field emits
-    :class:`StoredOutputIdentityWarning`.
+    Optional fields use JSON ``null`` so the key set is stable.
     """
-    payload: dict[str, Any] = {}
-
-    if artifact_id is not None:
-        payload["artifact_id"] = artifact_id
-    else:
-        warnings.warn(
-            "stored_output_id: excluded key 'artifact_id' (missing)",
-            StoredOutputIdentityWarning,
-            stacklevel=2,
-        )
-
-    if adapter_name is not None:
-        payload["adapter_name"] = adapter_name
-    else:
-        warnings.warn(
-            "stored_output_id: excluded key 'adapter_name' (missing)",
-            StoredOutputIdentityWarning,
-            stacklevel=2,
-        )
-
-    if adapter_version is not None:
-        payload["adapter_version"] = adapter_version
-    else:
-        warnings.warn(
-            "stored_output_id: excluded key 'adapter_version' (missing)",
-            StoredOutputIdentityWarning,
-            stacklevel=2,
-        )
-
-    if dataset_type is not None:
-        payload["dataset_type"] = dataset_type
-    else:
-        warnings.warn(
-            "stored_output_id: excluded key 'dataset_type' (missing)",
-            StoredOutputIdentityWarning,
-            stacklevel=2,
-        )
-
-    if schema is not None:
-        payload["schema_fingerprint"] = schema_fingerprint(schema)
-    else:
-        warnings.warn(
-            "stored_output_id: excluded key 'schema_fingerprint' (schema missing)",
-            StoredOutputIdentityWarning,
-            stacklevel=2,
-        )
-
-    if adapter_config_hash is not None:
-        payload["adapter_config_hash"] = adapter_config_hash
-    else:
-        warnings.warn(
-            "stored_output_id: excluded key 'adapter_config_hash' (missing)",
-            StoredOutputIdentityWarning,
-            stacklevel=2,
-        )
-
-    if pipeline_ordinal is not None:
-        payload["pipeline_ordinal"] = pipeline_ordinal
-    else:
-        warnings.warn(
-            "stored_output_id: excluded key 'pipeline_ordinal' (missing)",
-            StoredOutputIdentityWarning,
-            stacklevel=2,
-        )
-
-    body = canonical_json(payload)
-    return hashlib.sha256(body.encode("utf-8")).hexdigest()
+    body = {
+        "adapter_config_hash": adapter_config_hash,
+        "adapter_name": adapter_name,
+        "adapter_version": adapter_version,
+        "artifact_key": artifact_key,
+        "manifest_id": manifest_id,
+        "pipeline_ordinal": pipeline_ordinal,
+        "raw_content_hash": raw_content_hash,
+        "schema_fingerprint": schema_fingerprint,
+    }
+    return hashlib.sha256(canonical_json(body).encode("utf-8")).hexdigest()

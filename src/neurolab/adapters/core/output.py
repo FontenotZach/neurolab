@@ -17,8 +17,7 @@ class AdapterOutput:
     `payload` may use None, bool, Python int/float (finite), str, list, dict[str, ...], and numpy.ndarray
     only as leaf values (see neurolab.storage.adapter_results.payload_codec). Pickle is not supported.
 
-    ``adapter_config_hash`` optional fingerprint of adapter-specific options; when set, it participates
-    in ``stored_output_id`` determinism.
+    ``adapter_config_hash`` optional metadata for lineage (included in ``provenance_id``).
     """
 
     artifact_id: str

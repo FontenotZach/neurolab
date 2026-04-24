@@ -10,9 +10,9 @@ from neurolab.analysis_hub.models import AnalysisHandle, OutputMetadataRecord
 class AnalysisHub(Protocol):
     def list_records(self) -> list[OutputMetadataRecord]: ...
 
-    def get_record(self, stored_output_id: str) -> OutputMetadataRecord: ...
+    def get_record(self, provenance_id: str) -> OutputMetadataRecord: ...
 
-    def has_record(self, stored_output_id: str) -> bool: ...
+    def has_record(self, provenance_id: str) -> bool: ...
 
     def find_records(
         self,
@@ -23,9 +23,10 @@ class AnalysisHub(Protocol):
         adapter_version: str | None = None,
         dataset_type: str | None = None,
         payload_format: str | None = None,
+        data_hash: str | None = None,
     ) -> list[OutputMetadataRecord]: ...
 
-    def open_handle(self, stored_output_id: str) -> AnalysisHandle: ...
+    def open_handle(self, provenance_id: str) -> AnalysisHandle: ...
 
     def open_handles(
         self,
@@ -36,5 +37,5 @@ class AnalysisHub(Protocol):
         adapter_version: str | None = None,
         dataset_type: str | None = None,
         payload_format: str | None = None,
+        data_hash: str | None = None,
     ) -> list[AnalysisHandle]: ...
-

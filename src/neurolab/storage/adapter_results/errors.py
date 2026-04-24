@@ -12,4 +12,4 @@ class PayloadDecodeError(ValueError):
 
 
 class StoredOutputNotFound(FileNotFoundError):
-    """Raised when no record exists for the given manifest_id and stored_output_id."""
+    """Raised when no record exists for the given manifest_id and provenance_id."""

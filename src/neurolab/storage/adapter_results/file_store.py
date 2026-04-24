@@ -9,10 +9,16 @@ from typing import Any
 
 from neurolab.adapters.core.output import AdapterOutput
 from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipelineResult
-from neurolab.data_interface.models import Manifest
+from neurolab.data_interface.models import Artifact, Manifest, utc_now
 from neurolab.storage.adapter_results.errors import StoredOutputNotFound
-from neurolab.storage.adapter_results.ids import compute_stored_output_id
+from neurolab.storage.adapter_results.ids import (
+    artifact_key_for_provenance,
+    compute_data_hash,
+    compute_provenance_id,
+    schema_fingerprint,
+)
 from neurolab.storage.adapter_results.models import (
+    META_SCHEMA_V2,
     PAYLOAD_FORMAT_V1,
     PRIMARY_PAYLOAD_REL_PATH,
     PersistedAdapterOutput,
@@ -41,13 +47,21 @@ def _atomic_write_text(path: Path, text: str) -> None:
     tmp.replace(path)
 
 
+def _artifact_for_output(manifest: Manifest, output: AdapterOutput) -> Artifact:
+    for a in manifest.artifacts:
+        if a.artifact_id == output.artifact_id:
+            return a
+    raise ValueError(f"No artifact with artifact_id={output.artifact_id!r} in manifest")
+
+
 INDEX_FILENAME = "index.json"
 META_FILENAME = "meta.json"
 
 
 class FileAdapterResultStore:
     """
-    Stores adapter outputs under base_dir / {manifest_id} / {stored_output_id} /.
+    Stores adapter outputs under base_dir / {manifest_id} / {provenance_id} /.
+
     Authoritative state is meta.json + payload material in each record directory.
     index.json is derived and must not be treated as source of truth.
     """
@@ -64,20 +78,28 @@ class FileAdapterResultStore:
         expected_ids: set[str] = set()
 
         for ordinal, out in enumerate(result.outputs):
-            sid = compute_stored_output_id(
-                artifact_id=out.artifact_id,
+            art = _artifact_for_output(manifest, out)
+            ak = artifact_key_for_provenance(art)
+            sf = schema_fingerprint(out.schema)
+            prov = compute_provenance_id(
+                manifest_id=manifest.manifest_id,
+                artifact_key=ak,
+                raw_content_hash=art.content_hash,
                 adapter_name=out.adapter_name,
                 adapter_version=out.adapter_version,
-                dataset_type=out.dataset_type,
-                schema=out.schema,
                 adapter_config_hash=out.adapter_config_hash,
+                schema_fingerprint=sf,
                 pipeline_ordinal=ordinal,
             )
-            expected_ids.add(sid)
+            data_h = compute_data_hash(out.payload)
+            expected_ids.add(prov)
             meta = self._save_output_record(
                 manifest=manifest,
                 pipeline_ordinal=ordinal,
-                stored_output_id=sid,
+                provenance_id=prov,
+                data_hash=data_h,
+                schema_fp=sf,
+                source_artifact=art,
                 output=out,
                 manifest_dir=manifest_dir,
             )
@@ -92,34 +114,41 @@ class FileAdapterResultStore:
         *,
         manifest: Manifest,
         pipeline_ordinal: int,
-        stored_output_id: str,
+        provenance_id: str,
+        data_hash: str,
+        schema_fp: str,
+        source_artifact: Artifact,
         output: AdapterOutput,
         manifest_dir: Path,
     ) -> PersistedAdapterOutput:
-        record_dir = manifest_dir / stored_output_id
+        record_dir = manifest_dir / provenance_id
         record_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1) Payload artifacts first (arrays/*.npy then payload.json), all atomic per file inside encode_payload_to_record
         encode_payload_to_record(output.payload, record_dir)
 
         row_count, shape_summary = collect_row_count_and_shapes(output.payload)
 
         persisted = PersistedAdapterOutput(
-            stored_output_id=stored_output_id,
+            meta_schema_version=META_SCHEMA_V2,
+            provenance_id=provenance_id,
+            data_hash=data_hash,
             manifest_id=manifest.manifest_id,
             artifact_id=output.artifact_id,
+            raw_content_hash=source_artifact.content_hash,
             adapter_name=output.adapter_name,
             adapter_version=output.adapter_version,
+            adapter_config_hash=output.adapter_config_hash,
+            schema_fingerprint=schema_fp,
             dataset_type=output.dataset_type,
             pipeline_ordinal=pipeline_ordinal,
             schema=dict(output.schema),
             payload_format=PAYLOAD_FORMAT_V1,
             payload_path=PRIMARY_PAYLOAD_REL_PATH,
+            created_at=utc_now().isoformat(),
             row_count=row_count,
             shape_summary=shape_summary,
         )
 
-        # 2) meta.json last for this record
         meta_text = json.dumps(persisted.to_dict(), sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         _atomic_write_text(record_dir / META_FILENAME, meta_text)
 
@@ -147,7 +176,8 @@ class FileAdapterResultStore:
             po = PersistedAdapterOutput.from_dict(data)
             entries.append(
                 {
-                    "stored_output_id": po.stored_output_id,
+                    "provenance_id": po.provenance_id,
+                    "data_hash": po.data_hash,
                     "pipeline_ordinal": po.pipeline_ordinal,
                     "artifact_id": po.artifact_id,
                     "adapter_name": po.adapter_name,
@@ -175,21 +205,21 @@ class FileAdapterResultStore:
         out.sort(key=lambda m: m.pipeline_ordinal)
         return out
 
-    def load_metadata(self, manifest_id: str, stored_output_id: str) -> PersistedAdapterOutput:
-        record_dir = self._record_dir(manifest_id, stored_output_id)
+    def load_metadata(self, manifest_id: str, provenance_id: str) -> PersistedAdapterOutput:
+        record_dir = self._record_dir(manifest_id, provenance_id)
         meta_path = record_dir / META_FILENAME
         if not meta_path.is_file():
-            raise StoredOutputNotFound(f"No stored output {stored_output_id!r} for manifest {manifest_id!r}")
+            raise StoredOutputNotFound(f"No stored output {provenance_id!r} for manifest {manifest_id!r}")
         return PersistedAdapterOutput.from_dict(json.loads(meta_path.read_text(encoding="utf-8")))
 
-    def load_payload(self, manifest_id: str, stored_output_id: str) -> Any:
-        record_dir = self._record_dir(manifest_id, stored_output_id)
+    def load_payload(self, manifest_id: str, provenance_id: str) -> Any:
+        record_dir = self._record_dir(manifest_id, provenance_id)
         if not (record_dir / META_FILENAME).is_file():
-            raise StoredOutputNotFound(f"No stored output {stored_output_id!r} for manifest {manifest_id!r}")
+            raise StoredOutputNotFound(f"No stored output {provenance_id!r} for manifest {manifest_id!r}")
         return decode_payload_from_record(record_dir)
 
-    def _record_dir(self, manifest_id: str, stored_output_id: str) -> Path:
-        return self.base_dir / manifest_id / stored_output_id
+    def _record_dir(self, manifest_id: str, provenance_id: str) -> Path:
+        return self.base_dir / manifest_id / provenance_id
 
     def delete_manifest_outputs(self, manifest_id: str) -> None:
         manifest_dir = self.base_dir / manifest_id

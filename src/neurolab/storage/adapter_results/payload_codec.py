@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import math
 from decimal import Decimal
@@ -22,6 +23,36 @@ NEUROLAB_PAYLOAD_ARRAY_PORTAL_V1 = "__neurolab_payload_array_v1__"
 def validate_payload_for_codec(obj: Any) -> None:
     """Validate payload against the v1 contract. Raises PayloadEncodeError if invalid."""
     _validate_value(obj, path_label="$")
+
+
+def fingerprint_payload_content(payload: Any) -> str:
+    """SHA-256 hex digest of canonical payload content (adapter-agnostic).
+
+    Identical validated payloads yield the same fingerprint regardless of adapter,
+    schema envelope, or provenance metadata on :class:`~neurolab.adapters.core.output.AdapterOutput`.
+    """
+    validate_payload_for_codec(payload)
+    tree = _canonical_content_fingerprint_tree(payload)
+    text = json.dumps(tree, sort_keys=True, separators=(",", ":"), ensure_ascii=False, allow_nan=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def _canonical_content_fingerprint_tree(obj: Any) -> Any:
+    """Build a JSON-serializable tree with ndarray leaves reduced to dtype/shape/content hash."""
+    if isinstance(obj, np.ndarray):
+        data = np.ascontiguousarray(obj)
+        return {
+            "__neurolab_payload_content_nd_v1__": {
+                "dtype": str(obj.dtype),
+                "shape": [int(x) for x in obj.shape],
+                "sha256": hashlib.sha256(data.tobytes()).hexdigest(),
+            }
+        }
+    if isinstance(obj, dict):
+        return {k: _canonical_content_fingerprint_tree(obj[k]) for k in sorted(obj.keys())}
+    if isinstance(obj, list):
+        return [_canonical_content_fingerprint_tree(item) for item in obj]
+    return obj
 
 
 def _reject_reserved_portal_map(d: dict[Any, Any]) -> None:

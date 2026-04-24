@@ -12,7 +12,7 @@ from typer.testing import CliRunner
 
 from neurolab.adapters.core.output import AdapterOutput
 from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipelineResult
-from neurolab.data_interface.models import DataSourceSpec, Manifest
+from neurolab.data_interface.models import Artifact, DataSourceSpec, Manifest
 from neurolab.interfaces.cli import app
 from neurolab.storage.adapter_results.file_store import FileAdapterResultStore
 from neurolab.storage.manifest_store import FileManifestStore
@@ -49,13 +49,27 @@ def cli_env(tmp_path, monkeypatch):
     return tmp_path
 
 
+def _artifact_cli(aid: str = "art-1", *, rel: str = "f.csv") -> Artifact:
+    return Artifact(
+        artifact_id=aid,
+        source_uri="file:///x",
+        artifact_type="file",
+        relative_path=rel,
+        absolute_path=f"/tmp/{rel}",
+        size_bytes=3,
+        mtime=datetime(2024, 1, 1, tzinfo=UTC),
+        content_hash="d" * 64,
+        media_type="text/csv",
+    )
+
+
 def _save_child_record(tmp_path, manifest_id: str, payload):
     store = FileAdapterResultStore(base_dir=tmp_path / "adapter_outputs")
     m = Manifest(
         manifest_id=manifest_id,
         source=DataSourceSpec(uri="file:///x", compute_hash=True),
         created_at=datetime(2024, 1, 1, tzinfo=UTC),
-        artifacts=[],
+        artifacts=[_artifact_cli()],
         warnings=[],
     )
     out = AdapterOutput(
@@ -65,10 +79,39 @@ def _save_child_record(tmp_path, manifest_id: str, payload):
         dataset_type="tabular",
         schema={"k": 1},
         payload=payload,
-        adapter_config_hash="cfg-test",
     )
     saved = store.save_pipeline_result(m, AdapterPipelineResult(outputs=[out], skipped_artifacts=[]))
-    return saved[0].stored_output_id
+    return saved[0].provenance_id
+
+
+def _save_two_children_same_manifest(tmp_path, manifest_id: str):
+    """Persist two adapter outputs under one manifest (distinct provenance ids)."""
+    store = FileAdapterResultStore(base_dir=tmp_path / "adapter_outputs")
+    arts = [_artifact_cli("art-1", rel="a.csv"), _artifact_cli("art-2", rel="b.csv")]
+    m = Manifest(
+        manifest_id=manifest_id,
+        source=DataSourceSpec(uri="file:///x", compute_hash=True),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+        artifacts=arts,
+        warnings=[],
+    )
+    o1 = AdapterOutput(
+        artifact_id="art-1",
+        adapter_name="t",
+        adapter_version="1.0",
+        dataset_type="tabular",
+        schema={"z": 1},
+        payload=[{"a": 1}],
+    )
+    o2 = AdapterOutput(
+        artifact_id="art-2",
+        adapter_name="t",
+        adapter_version="1.0",
+        dataset_type="tabular",
+        schema={"z": 2},
+        payload=[{"a": 2}],
+    )
+    store.save_pipeline_result(m, AdapterPipelineResult(outputs=[o1, o2], skipped_artifacts=[]))
 
 
 @pytest.fixture()
@@ -206,10 +249,18 @@ def test_children_lists_records(cli_env, tmp_path):
 @pytest.mark.unit
 def test_children_long(cli_env, tmp_path):
     _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
-    result = runner.invoke(app, ["children", "mid-1", "--long"])
-    assert result.exit_code == 0
-    # Column headers may truncate in Rich tables; check for the payload_format value prefix.
-    assert "neur" in result.output
+
+    def _top_border_sep_count(s: str) -> int:
+        for line in s.splitlines():
+            if line.startswith("┏"):
+                return line.count("┳")
+        return 0
+
+    short = runner.invoke(app, ["children", "mid-1"])
+    long = runner.invoke(app, ["children", "mid-1", "--long"])
+    assert long.exit_code == 0
+    assert "Children of manifest mid-1" in long.output
+    assert _top_border_sep_count(long.output) > _top_border_sep_count(short.output)
 
 
 @pytest.mark.unit
@@ -217,7 +268,7 @@ def test_child_show(cli_env, tmp_path):
     sid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
     result = runner.invoke(app, ["child", "show", "mid-1", sid])
     assert result.exit_code == 0
-    assert "stored_output_id" in result.output
+    assert "provenance_id" in result.output
     assert "schema" in result.output
     assert '"k": 1' in result.output
 
@@ -326,24 +377,24 @@ def test_hub_list_long_includes_extra_fields(cli_env, tmp_path):
 
 @pytest.mark.unit
 def test_hub_show_valid_and_invalid(cli_env, tmp_path):
-    sid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+    pid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
     hub_dir = tmp_path / "adapter_outputs"
-    ok = runner.invoke(app, ["hub", "show", "--hub-dir", str(hub_dir), sid])
+    ok = runner.invoke(app, ["hub", "show", "--hub-dir", str(hub_dir), pid])
     assert ok.exit_code == 0
-    assert "stored_output_id" in ok.output
+    assert "provenance_id" in ok.output
+    assert "data_hash" in ok.output
     assert "schema" in ok.output
     assert '"k": 1' in ok.output
     assert "schema_fingerprint" in ok.output
 
     bad = runner.invoke(app, ["hub", "show", "--hub-dir", str(hub_dir), "0" * 64])
     assert bad.exit_code == 1
-    assert "Stored output not found" in bad.output
+    assert "Record not found" in bad.output
 
 
 @pytest.mark.unit
 def test_hub_count_summarizes(cli_env, tmp_path):
-    _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
-    _save_child_record(tmp_path, "mid-1", payload=[{"a": 2}])
+    _save_two_children_same_manifest(tmp_path, "mid-1")
     _save_child_record(tmp_path, "mid-2", payload=[{"a": 3}])
 
     hub_dir = tmp_path / "adapter_outputs"
@@ -356,26 +407,25 @@ def test_hub_count_summarizes(cli_env, tmp_path):
 
 @pytest.mark.unit
 def test_hub_load_summary_and_json(cli_env, tmp_path):
-    sid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
+    pid = _save_child_record(tmp_path, "mid-1", payload={"x": 1})
     hub_dir = tmp_path / "adapter_outputs"
-    result = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), sid])
+    result = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), pid])
     assert result.exit_code == 0
     assert "Loaded payload" in result.output
     assert "python_type" in result.output
 
-    result_json = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), sid, "--json"])
+    result_json = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), pid, "--json"])
     assert result_json.exit_code == 0
     assert '"x": 1' in result_json.output
 
     bad = runner.invoke(app, ["hub", "load", "--hub-dir", str(hub_dir), "0" * 64])
     assert bad.exit_code == 1
-    assert "Stored output not found" in bad.output
+    assert "Record not found" in bad.output
 
 
 @pytest.mark.unit
 def test_hub_schemas_groups(cli_env, tmp_path):
-    _save_child_record(tmp_path, "mid-1", payload=[{"a": 1}])
-    _save_child_record(tmp_path, "mid-1", payload=[{"a": 2}])
+    _save_two_children_same_manifest(tmp_path, "mid-1")
     hub_dir = tmp_path / "adapter_outputs"
     result = runner.invoke(app, ["hub", "schemas", "--hub-dir", str(hub_dir)])
     assert result.exit_code == 0

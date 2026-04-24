@@ -143,6 +143,21 @@ Each `AdapterOutput` contains:
 
 Code: [`src/neurolab/adapters/core/base.py`](src/neurolab/adapters/core/base.py), [`src/neurolab/adapters/core/output.py`](src/neurolab/adapters/core/output.py).
 
+#### 10) Persisted adapter outputs (`neurolab.storage.adapter_results`)
+
+When using `neurolab parse <manifest_id> --store-outputs`, each row is written under:
+
+`~/.neurolab/data/adapter_outputs/{manifest_id}/{provenance_id}/`
+
+Two IDs separate **content** from **lineage**:
+
+- **`data_hash`**: SHA-256 of the canonical standardized payload (same decoded adapter output ⇒ same hash, regardless of which adapter produced it).
+- **`provenance_id`**: SHA-256 of canonical provenance metadata (e.g. `manifest_id`, artifact path key, raw `content_hash`, adapter name/version, schema fingerprint, pipeline ordinal, optional `adapter_config_hash`). This is the **directory name** and stable record key for the Analysis Hub / CLI.
+
+`meta.json` records both, plus fields such as `artifact_id`, `schema`, `created_at`, and payload location. Older `meta.json` files without `meta_schema_version` / `provenance_id` are still loaded as legacy v1 (single legacy id mapped to both concepts).
+
+Code: [`src/neurolab/storage/adapter_results/file_store.py`](src/neurolab/storage/adapter_results/file_store.py), [`src/neurolab/storage/adapter_results/ids.py`](src/neurolab/storage/adapter_results/ids.py), [`src/neurolab/storage/adapter_results/models.py`](src/neurolab/storage/adapter_results/models.py). Analysis Hub: [`src/neurolab/analysis_hub/filesystem.py`](src/neurolab/analysis_hub/filesystem.py).
+
 ---
 
 ### Current adapter implementations

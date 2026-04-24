@@ -26,16 +26,16 @@ class FileSystemAnalysisHub:
         self._load_registry()
 
     def list_records(self) -> list[OutputMetadataRecord]:
-        return [self._records_by_id[sid] for sid in self._ordered_ids]
+        return [self._records_by_id[pid] for pid in self._ordered_ids]
 
-    def get_record(self, stored_output_id: str) -> OutputMetadataRecord:
-        rec = self._records_by_id.get(stored_output_id)
+    def get_record(self, provenance_id: str) -> OutputMetadataRecord:
+        rec = self._records_by_id.get(provenance_id)
         if rec is None:
-            raise MetadataRecordNotFoundError(f"stored_output_id not found: {stored_output_id!r}")
+            raise MetadataRecordNotFoundError(f"provenance_id not found: {provenance_id!r}")
         return rec
 
-    def has_record(self, stored_output_id: str) -> bool:
-        return stored_output_id in self._records_by_id
+    def has_record(self, provenance_id: str) -> bool:
+        return provenance_id in self._records_by_id
 
     def find_records(
         self,
@@ -46,6 +46,7 @@ class FileSystemAnalysisHub:
         adapter_version: str | None = None,
         dataset_type: str | None = None,
         payload_format: str | None = None,
+        data_hash: str | None = None,
     ) -> list[OutputMetadataRecord]:
         def _match(r: OutputMetadataRecord) -> bool:
             if manifest_id is not None and r.manifest_id != manifest_id:
@@ -60,18 +61,20 @@ class FileSystemAnalysisHub:
                 return False
             if payload_format is not None and r.payload_format != payload_format:
                 return False
+            if data_hash is not None and r.data_hash != data_hash:
+                return False
             return True
 
         out: list[OutputMetadataRecord] = []
-        for sid in self._ordered_ids:
-            r = self._records_by_id[sid]
+        for pid in self._ordered_ids:
+            r = self._records_by_id[pid]
             if _match(r):
                 out.append(r)
         return out
 
-    def open_handle(self, stored_output_id: str) -> AnalysisHandle:
-        rec = self.get_record(stored_output_id)
-        payload = self._payloads_by_id[stored_output_id]
+    def open_handle(self, provenance_id: str) -> AnalysisHandle:
+        rec = self.get_record(provenance_id)
+        payload = self._payloads_by_id[provenance_id]
         return AnalysisHandle(metadata=rec, payload=payload)
 
     def open_handles(
@@ -83,6 +86,7 @@ class FileSystemAnalysisHub:
         adapter_version: str | None = None,
         dataset_type: str | None = None,
         payload_format: str | None = None,
+        data_hash: str | None = None,
     ) -> list[AnalysisHandle]:
         records = self.find_records(
             manifest_id=manifest_id,
@@ -91,8 +95,9 @@ class FileSystemAnalysisHub:
             adapter_version=adapter_version,
             dataset_type=dataset_type,
             payload_format=payload_format,
+            data_hash=data_hash,
         )
-        return [AnalysisHandle(metadata=r, payload=self._payloads_by_id[r.stored_output_id]) for r in records]
+        return [AnalysisHandle(metadata=r, payload=self._payloads_by_id[r.provenance_id]) for r in records]
 
     def _load_registry(self) -> None:
         self._records_by_id.clear()
@@ -117,15 +122,21 @@ class FileSystemAnalysisHub:
                 rec = self._build_record(meta_path)
                 payload = self._build_payload_descriptor(rec, record_dir)
 
-                sid = rec.stored_output_id
-                self._records_by_id[sid] = rec
-                self._payloads_by_id[sid] = payload
+                pid = rec.provenance_id
+                self._records_by_id[pid] = rec
+                self._payloads_by_id[pid] = payload
 
-                order_key = (rec.manifest_id, rec.pipeline_ordinal, rec.artifact_id, rec.adapter_name, rec.stored_output_id)
-                found.append((order_key, sid))
+                order_key = (
+                    rec.manifest_id,
+                    rec.pipeline_ordinal,
+                    rec.artifact_id,
+                    rec.adapter_name,
+                    rec.provenance_id,
+                )
+                found.append((order_key, pid))
 
         found.sort(key=lambda x: x[0])
-        self._ordered_ids = [sid for _, sid in found]
+        self._ordered_ids = [pid for _, pid in found]
 
     def _build_record(self, meta_path: Path) -> OutputMetadataRecord:
         try:
@@ -135,16 +146,22 @@ class FileSystemAnalysisHub:
             raise MetadataLoadError(f"Malformed metadata at {str(meta_path)!r}") from e
 
         return OutputMetadataRecord(
-            stored_output_id=po.stored_output_id,
+            provenance_id=po.provenance_id,
+            data_hash=po.data_hash,
             manifest_id=po.manifest_id,
             artifact_id=po.artifact_id,
+            raw_content_hash=po.raw_content_hash,
             adapter_name=po.adapter_name,
             adapter_version=po.adapter_version,
+            adapter_config_hash=po.adapter_config_hash,
+            schema_fingerprint=po.schema_fingerprint,
             dataset_type=po.dataset_type,
             pipeline_ordinal=po.pipeline_ordinal,
             schema=po.schema,
             payload_format=po.payload_format,
             payload_path=po.payload_path,
+            created_at=po.created_at,
+            meta_schema_version=po.meta_schema_version,
             row_count=po.row_count,
             shape_summary=po.shape_summary,
         )
@@ -153,10 +170,9 @@ class FileSystemAnalysisHub:
         meta_json_path = record_dir / META_FILENAME
         primary_payload_path = record_dir / rec.payload_path
         return PayloadDescriptor(
-            stored_output_id=rec.stored_output_id,
+            provenance_id=rec.provenance_id,
             manifest_id=rec.manifest_id,
             record_dir=record_dir,
             meta_json_path=meta_json_path,
             primary_payload_path=primary_payload_path,
         )
-

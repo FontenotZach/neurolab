@@ -22,11 +22,11 @@ class SelectionResult:
     """
     Result of metadata-only selection against the Analysis Hub.
 
-    `selected_stored_output_ids` must preserve the hub's ordering for the records
-    considered during selection (no independent sorting).
+    ``selected_provenance_ids`` preserves hub ordering for considered records.
+    Decide computational equivalence using ``data_hash`` on hub metadata, not
+    ``provenance_id`` (lineage differs when adapters differ).
     """
 
     module_name: str
-    selected_stored_output_ids: tuple[str, ...]
+    selected_provenance_ids: tuple[str, ...]
     total_candidates_seen: int
-

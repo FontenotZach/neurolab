@@ -112,12 +112,14 @@ def _hub_filter_records(
     artifact_id: str | None,
     adapter_name: str | None,
     dataset_type: str | None,
+    data_hash: str | None = None,
 ):
     return hub.find_records(
         manifest_id=manifest_id,
         artifact_id=artifact_id,
         adapter_name=adapter_name,
         dataset_type=dataset_type,
+        data_hash=data_hash,
     )
 
 
@@ -186,7 +188,8 @@ def children(
 
     table = Table(title=f"Children of manifest {canonical_id}")
     table.add_column("Ordinal", justify="right", style="bold cyan")
-    table.add_column("Stored Output ID", style="cyan", no_wrap=True)
+    table.add_column("Provenance ID", style="cyan", no_wrap=True)
+    table.add_column("Data Hash", style="magenta", no_wrap=True)
     table.add_column("Artifact ID", style="green", no_wrap=True)
     table.add_column("Adapter", style="bold")
     table.add_column("Dataset Type")
@@ -198,7 +201,8 @@ def children(
     for meta in children_meta:
         row = [
             str(meta.pipeline_ordinal),
-            _short_id(meta.stored_output_id, 12),
+            _short_id(meta.provenance_id, 12),
+            _short_id(meta.data_hash, 12),
             meta.artifact_id,
             meta.adapter_name,
             meta.dataset_type,
@@ -218,7 +222,7 @@ def children(
 @child_app.command("show")
 def child_show(
     manifest_id: str,
-    stored_output_id: str,
+    provenance_id: str,
     adapter_store_dir: Annotated[
         Path | None,
         typer.Option(
@@ -236,21 +240,29 @@ def child_show(
     canonical_id = _canonical_manifest_id(resolved_id)
     store = FileAdapterResultStore(base_dir=adapter_store_dir)
     try:
-        meta = store.load_metadata(canonical_id, stored_output_id)
+        meta = store.load_metadata(canonical_id, provenance_id)
     except StoredOutputNotFound as err:
         print(f"[red]{err}[/red]")
         raise typer.Exit(code=1) from err
 
-    table = Table(title=f"Child record {_short_id(meta.stored_output_id, 12)} (manifest {resolved_id})")
+    table = Table(title=f"Child record {_short_id(meta.provenance_id, 12)} (manifest {resolved_id})")
     table.add_column("Field", style="bold cyan", no_wrap=True)
     table.add_column("Value", style="bold green")
-    table.add_row("stored_output_id", meta.stored_output_id)
+    table.add_row("provenance_id", meta.provenance_id)
+    table.add_row("data_hash", meta.data_hash)
     table.add_row("manifest_id", meta.manifest_id)
     table.add_row("artifact_id", meta.artifact_id)
+    table.add_row("raw_content_hash", "" if meta.raw_content_hash is None else meta.raw_content_hash)
     table.add_row("adapter_name", meta.adapter_name)
     table.add_row("adapter_version", meta.adapter_version)
     table.add_row("dataset_type", meta.dataset_type)
     table.add_row("pipeline_ordinal", str(meta.pipeline_ordinal))
+    table.add_row("schema_fingerprint", meta.schema_fingerprint)
+    table.add_row(
+        "adapter_config_hash",
+        "" if meta.adapter_config_hash is None else meta.adapter_config_hash,
+    )
+    table.add_row("created_at", meta.created_at)
     table.add_row("payload_format", meta.payload_format)
     table.add_row("payload_path", meta.payload_path)
     table.add_row("row_count", "" if meta.row_count is None else str(meta.row_count))
@@ -263,7 +275,7 @@ def child_show(
 @child_app.command("payload")
 def child_payload(
     manifest_id: str,
-    stored_output_id: str,
+    provenance_id: str,
     full: Annotated[
         bool,
         typer.Option("--full", help="Print full payload (arrays expanded)."),
@@ -289,7 +301,7 @@ def child_payload(
     canonical_id = _canonical_manifest_id(resolved_id)
     store = FileAdapterResultStore(base_dir=adapter_store_dir)
     try:
-        payload = store.load_payload(canonical_id, stored_output_id)
+        payload = store.load_payload(canonical_id, provenance_id)
     except StoredOutputNotFound as err:
         print(f"[red]{err}[/red]")
         raise typer.Exit(code=1) from err
@@ -307,6 +319,7 @@ def hub_list(
     artifact_id: Annotated[str | None, typer.Option("--artifact-id", help="Filter by artifact_id.")] = None,
     adapter_name: Annotated[str | None, typer.Option("--adapter-name", help="Filter by adapter_name.")] = None,
     dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
+    data_hash: Annotated[str | None, typer.Option("--data-hash", help="Filter by standardized payload data_hash.")] = None,
     limit: Annotated[int | None, typer.Option("--limit", help="Show only the first N records after filtering.")] = None,
     long: Annotated[bool, typer.Option("--long", help="Include additional metadata columns.")] = False,
     hub_dir: Annotated[
@@ -323,12 +336,20 @@ def hub_list(
     ] = None,
 ):
     hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
-    records = _hub_filter_records(hub, manifest_id=manifest_id, artifact_id=artifact_id, adapter_name=adapter_name, dataset_type=dataset_type)
+    records = _hub_filter_records(
+        hub,
+        manifest_id=manifest_id,
+        artifact_id=artifact_id,
+        adapter_name=adapter_name,
+        dataset_type=dataset_type,
+        data_hash=data_hash,
+    )
     if limit is not None:
         records = records[: max(0, int(limit))]
 
     table = Table(title="Analysis Hub Records")
-    table.add_column("Stored Output ID", style="cyan", no_wrap=True)
+    table.add_column("Provenance ID", style="cyan", no_wrap=True)
+    table.add_column("Data Hash", style="magenta", no_wrap=True)
     table.add_column("Manifest ID", style="green", no_wrap=True)
     table.add_column("Artifact ID", style="green", no_wrap=True)
     table.add_column("Adapter", style="bold")
@@ -343,7 +364,8 @@ def hub_list(
 
     for r in records:
         row = [
-            _short_id(r.stored_output_id, 12),
+            _short_id(r.provenance_id, 12),
+            _short_id(r.data_hash, 12),
             _short_id(r.manifest_id, 12),
             r.artifact_id,
             r.adapter_name,
@@ -359,7 +381,7 @@ def hub_list(
 
 @hub_app.command("show")
 def hub_show(
-    stored_output_id: Annotated[str, typer.Argument(help="stored_output_id of the record to display.")],
+    provenance_id: Annotated[str, typer.Argument(help="provenance_id of the record to display.")],
     hub_dir: Annotated[
         Path | None,
         typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
@@ -371,29 +393,31 @@ def hub_show(
 ):
     hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
     try:
-        r = hub.get_record(stored_output_id)
-    except MetadataRecordNotFoundError as err:
-        print(f"[red]Stored output not found: {stored_output_id}[/red]")
-        raise typer.Exit(code=1) from err
+        r = hub.get_record(provenance_id)
+    except MetadataRecordNotFoundError:
+        print(f"[red]Record not found: {provenance_id}[/red]")
+        raise typer.Exit(code=1) from None
 
-    fp = schema_fingerprint(r.schema)
-
-    table = Table(title=f"Hub record {_short_id(r.stored_output_id, 12)}")
+    table = Table(title=f"Hub record {_short_id(r.provenance_id, 12)}")
     table.add_column("Field", style="bold cyan", no_wrap=True)
     table.add_column("Value", style="bold green")
 
-    table.add_row("stored_output_id", r.stored_output_id)
+    table.add_row("provenance_id", r.provenance_id)
+    table.add_row("data_hash", r.data_hash)
     table.add_row("manifest_id", r.manifest_id)
     table.add_row("artifact_id", r.artifact_id)
+    table.add_row("raw_content_hash", "" if r.raw_content_hash is None else r.raw_content_hash)
     table.add_row("adapter_name", r.adapter_name)
     table.add_row("adapter_version", r.adapter_version)
+    table.add_row("adapter_config_hash", "" if r.adapter_config_hash is None else r.adapter_config_hash)
     table.add_row("dataset_type", r.dataset_type)
     table.add_row("pipeline_ordinal", str(r.pipeline_ordinal))
     table.add_row("payload_format", r.payload_format)
     table.add_row("payload_path", r.payload_path)
     table.add_row("row_count", "" if r.row_count is None else str(r.row_count))
     table.add_row("shape_summary", "" if r.shape_summary is None else json.dumps(r.shape_summary, sort_keys=True, ensure_ascii=False))
-    table.add_row("schema_fingerprint", fp)
+    table.add_row("schema_fingerprint", r.schema_fingerprint)
+    table.add_row("created_at", r.created_at)
     print(table)
 
     print("[bold]schema[/bold]")
@@ -406,6 +430,7 @@ def hub_count(
     artifact_id: Annotated[str | None, typer.Option("--artifact-id", help="Filter by artifact_id.")] = None,
     adapter_name: Annotated[str | None, typer.Option("--adapter-name", help="Filter by adapter_name.")] = None,
     dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
+    data_hash: Annotated[str | None, typer.Option("--data-hash", help="Filter by data_hash.")] = None,
     hub_dir: Annotated[
         Path | None,
         typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
@@ -416,7 +441,14 @@ def hub_count(
     ] = None,
 ):
     hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
-    records = _hub_filter_records(hub, manifest_id=manifest_id, artifact_id=artifact_id, adapter_name=adapter_name, dataset_type=dataset_type)
+    records = _hub_filter_records(
+        hub,
+        manifest_id=manifest_id,
+        artifact_id=artifact_id,
+        adapter_name=adapter_name,
+        dataset_type=dataset_type,
+        data_hash=data_hash,
+    )
 
     adapter_counts: dict[str, int] = {}
     dataset_counts: dict[str, int] = {}
@@ -464,7 +496,7 @@ def hub_count(
 
 @hub_app.command("load")
 def hub_load(
-    stored_output_id: Annotated[str, typer.Argument(help="stored_output_id of the record to load.")],
+    provenance_id: Annotated[str, typer.Argument(help="provenance_id of the record to load.")],
     json_out: Annotated[bool, typer.Option("--json", help="Print decoded payload as JSON (may be large).")] = False,
     summary_only: Annotated[bool, typer.Option("--summary-only", help="Print only a summary (default behavior).")] = True,
     hub_dir: Annotated[
@@ -478,10 +510,10 @@ def hub_load(
 ):
     hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
     try:
-        h = hub.open_handle(stored_output_id)
-    except MetadataRecordNotFoundError as err:
-        print(f"[red]Stored output not found: {stored_output_id}[/red]")
-        raise typer.Exit(code=1) from err
+        h = hub.open_handle(provenance_id)
+    except MetadataRecordNotFoundError:
+        print(f"[red]Record not found: {provenance_id}[/red]")
+        raise typer.Exit(code=1) from None
 
     try:
         payload = h.load()
@@ -494,10 +526,11 @@ def hub_load(
     keys = list(payload.keys()) if isinstance(payload, dict) else None
     n_items = len(payload) if isinstance(payload, list) else None
 
-    table = Table(title=f"Loaded payload for {_short_id(r.stored_output_id, 12)}")
+    table = Table(title=f"Loaded payload for {_short_id(r.provenance_id, 12)}")
     table.add_column("Field", style="bold cyan", no_wrap=True)
     table.add_column("Value", style="bold green")
-    table.add_row("stored_output_id", r.stored_output_id)
+    table.add_row("provenance_id", r.provenance_id)
+    table.add_row("data_hash", r.data_hash)
     table.add_row("python_type", payload_type)
     if keys is not None:
         table.add_row("top_level_keys", ", ".join([str(k) for k in keys[:20]]) + ("" if len(keys) <= 20 else ", ..."))
@@ -521,6 +554,7 @@ def hub_schemas(
     artifact_id: Annotated[str | None, typer.Option("--artifact-id", help="Filter by artifact_id.")] = None,
     adapter_name: Annotated[str | None, typer.Option("--adapter-name", help="Filter by adapter_name.")] = None,
     dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
+    data_hash: Annotated[str | None, typer.Option("--data-hash", help="Filter by data_hash.")] = None,
     long: Annotated[bool, typer.Option("--long", help="Include an example id and schema preview.")] = False,
     hub_dir: Annotated[
         Path | None,
@@ -532,7 +566,14 @@ def hub_schemas(
     ] = None,
 ):
     hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
-    records = _hub_filter_records(hub, manifest_id=manifest_id, artifact_id=artifact_id, adapter_name=adapter_name, dataset_type=dataset_type)
+    records = _hub_filter_records(
+        hub,
+        manifest_id=manifest_id,
+        artifact_id=artifact_id,
+        adapter_name=adapter_name,
+        dataset_type=dataset_type,
+        data_hash=data_hash,
+    )
 
     groups: dict[tuple[str, str, str], list] = {}
     for r in records:
@@ -557,7 +598,7 @@ def hub_schemas(
             preview = canonical_json(example.schema)
             if len(preview) > 200:
                 preview = preview[:200] + "..."
-            row.extend([_short_id(example.stored_output_id, 12), preview])
+            row.extend([_short_id(example.provenance_id, 12), preview])
         table.add_row(*row)
 
     print(table)
