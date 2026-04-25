@@ -20,7 +20,8 @@ class OutputGroupBuilder(Protocol, Generic[RequestT]):
 
     - `describe()` is informational only.
     - `select()` is metadata-only: it browses hub metadata and returns selected
-      persisted output addressing ids (typically `OutputMetadataRecord.provenance_id`),
+      persisted output addressing ids (typically :attr:`~neurolab.analysis_hub.models.HubRecord.provenance_id`
+      for ``record_kind == 'original'`` records from ``hub.list_records()``),
       preserving hub ordering.
     - `build()` creates OutputGroup objects from selected metadata, must not load
       payloads, and must not mutate adapter outputs. It may create parent-child

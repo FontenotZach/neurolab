@@ -4,7 +4,7 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath
 
 from neurolab.analysis_hub.interfaces import AnalysisHub
-from neurolab.analysis_hub.models import OutputMetadataRecord
+from neurolab.analysis_hub.models import HubRecord
 from neurolab.output_groups.base import OutputGroupBuilder
 from neurolab.output_groups.models import OutputGroup, OutputGroupBuilderDescription, OutputGroupSelectionResult
 
@@ -126,7 +126,7 @@ class NeuralynxCSCOutputGroupBuilder(OutputGroupBuilder[NeuralynxCSCGroupRequest
         return groups
 
 
-def _extract_relative_path(record: OutputMetadataRecord) -> str | None:
+def _extract_relative_path(record: HubRecord) -> str | None:
     """
     Pull a relative path string from hub metadata.
 
@@ -168,7 +168,7 @@ def _parent_folder(relative_path: str) -> str:
 
 
 def _discover_candidates(hub: AnalysisHub, request: NeuralynxCSCGroupRequest) -> list[CandidateCSCRecord]:
-    records = hub.list_records()
+    records = [r for r in hub.list_records() if r.record_kind == "original"]
     out: list[CandidateCSCRecord] = []
 
     for hub_order, r in enumerate(records):

@@ -4,13 +4,13 @@ from __future__ import annotations
 
 from typing import Protocol
 
-from neurolab.analysis_hub.models import AnalysisHandle, OutputMetadataRecord
+from neurolab.analysis_hub.models import AnalysisHandle, HubRecord, RecordKind
 
 
 class AnalysisHub(Protocol):
-    def list_records(self) -> list[OutputMetadataRecord]: ...
+    def list_records(self, *, include_derived: bool = False) -> list[HubRecord]: ...
 
-    def get_record(self, provenance_id: str) -> OutputMetadataRecord: ...
+    def get_record(self, provenance_id: str) -> HubRecord: ...
 
     def has_record(self, provenance_id: str) -> bool: ...
 
@@ -24,7 +24,10 @@ class AnalysisHub(Protocol):
         dataset_type: str | None = None,
         payload_format: str | None = None,
         data_hash: str | None = None,
-    ) -> list[OutputMetadataRecord]: ...
+        record_kind: RecordKind | None = None,
+        record_type: str | None = None,
+        include_derived: bool = False,
+    ) -> list[HubRecord]: ...
 
     def open_handle(self, provenance_id: str) -> AnalysisHandle: ...
 
@@ -38,4 +41,7 @@ class AnalysisHub(Protocol):
         dataset_type: str | None = None,
         payload_format: str | None = None,
         data_hash: str | None = None,
+        record_kind: RecordKind | None = None,
+        record_type: str | None = None,
+        include_derived: bool = False,
     ) -> list[AnalysisHandle]: ...

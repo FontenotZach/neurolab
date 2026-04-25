@@ -547,3 +547,79 @@ def test_clear_with_confirm(cli_env, sample_source):
     assert result.exit_code == 0
     assert "Deleted" in result.output
     assert store.list() == []
+
+
+# --- analysis ---
+
+
+@pytest.mark.unit
+def test_analysis_list_includes_registered_module(cli_env):
+    result = runner.invoke(app, ["analysis", "list"])
+    assert result.exit_code == 0
+    assert "Analysis Modules" in result.output
+    assert "payload_top_level_count" in result.output
+
+
+@pytest.mark.unit
+def test_analysis_describe_payload_top_level_count(cli_env):
+    result = runner.invoke(app, ["analysis", "describe", "payload_top_level_count"])
+    assert result.exit_code == 0
+    assert "payload_top_level_count" in result.output
+    assert "module_version" in result.output
+
+
+@pytest.mark.unit
+def test_analysis_run_with_request_json(cli_env):
+    analysis_dir = cli_env / "analysis_results"
+    analysis_dir.mkdir(parents=True, exist_ok=True)
+    adapter_dir = cli_env / "adapter_outputs"
+
+    store = FileAdapterResultStore()
+    arts = [_artifact_cli("a", rel="a.csv"), _artifact_cli("b", rel="b.csv")]
+    m = Manifest(
+        manifest_id="m-cli-analysis",
+        source=DataSourceSpec(uri="file:///x", compute_hash=True),
+        created_at=datetime(2024, 1, 1, tzinfo=UTC),
+        artifacts=arts,
+        warnings=[],
+    )
+    o1 = AdapterOutput(
+        artifact_id="a",
+        adapter_name="demo_ad",
+        adapter_version="1",
+        dataset_type="tabular",
+        schema={"k": 1},
+        payload={"x": 1, "y": 2},
+    )
+    o2 = AdapterOutput(
+        artifact_id="b",
+        adapter_name="demo_ad",
+        adapter_version="1",
+        dataset_type="tabular",
+        schema={"k": 2},
+        payload={"z": 3},
+    )
+    store.save_pipeline_result(m, AdapterPipelineResult(outputs=[o1, o2], skipped_artifacts=[]))
+
+    req_path = cli_env / "request.json"
+    req_path.write_text('{"adapter_name": "demo_ad"}', encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "analysis",
+            "run",
+            "payload_top_level_count",
+            "--request",
+            str(req_path),
+            "--adapter-outputs-dir",
+            str(adapter_dir),
+            "--analysis-results-dir",
+            str(analysis_dir),
+        ],
+    )
+    assert result.exit_code == 0
+    assert "Analysis Result" in result.output
+    assert "provenance_id" in result.output
+    assert "data_hash" in result.output
+    assert "payload_top_level_count" in result.output

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import importlib
 import json
+import sys
 from pathlib import Path
 from typing import Annotated, Any
 
@@ -10,6 +12,27 @@ from rich.table import Table
 
 from neurolab.adapters.pipeline.adapter_pipeline import AdapterPipeline
 from neurolab.analysis_hub import FileSystemAnalysisHub, MetadataLoadError, MetadataRecordNotFoundError, PayloadNotFoundError
+from neurolab.analysis_hub.record_mapping import (
+    LINEAGE_ADAPTER_CONFIG_HASH,
+    LINEAGE_ADAPTER_NAME,
+    LINEAGE_ADAPTER_VERSION,
+    LINEAGE_ARTIFACT_ID,
+    LINEAGE_INPUT_DATA_HASHES,
+    LINEAGE_INPUT_PROVENANCE_IDS,
+    LINEAGE_MANIFEST_ID,
+    LINEAGE_MODULE_NAME,
+    LINEAGE_MODULE_VERSION,
+    LINEAGE_PARAMETERS_HASH,
+    LINEAGE_PAYLOAD_FORMAT,
+    LINEAGE_PAYLOAD_PATH,
+    LINEAGE_PIPELINE_ORDINAL,
+    LINEAGE_RAW_CONTENT_HASH,
+    LINEAGE_ROW_COUNT,
+    LINEAGE_SCHEMA_FINGERPRINT,
+    LINEAGE_SHAPE_SUMMARY,
+)
+from neurolab.analysis_modules.orchestrator import run_analysis_module
+from neurolab.analysis_modules.registry import get_analysis_module, list_analysis_modules
 from neurolab.data_interface.models import DataSourceSpec
 from neurolab.data_interface.orchestrator import collect_source
 from neurolab.output_groups.builders.neuralynx_csc import NeuralynxCSCGroupRequest, NeuralynxCSCOutputGroupBuilder
@@ -17,6 +40,7 @@ from neurolab.output_groups.store import FileOutputGroupCatalogStore
 from neurolab.storage.adapter_results import FileAdapterResultStore
 from neurolab.storage.adapter_results.errors import StoredOutputNotFound
 from neurolab.storage.adapter_results.ids import canonical_json, schema_fingerprint
+from neurolab.storage.analysis_results.file_store import FileAnalysisResultStore
 from neurolab.storage.manifest_store import FileManifestStore
 from neurolab.storage.roster_store import RosterStore
 
@@ -32,6 +56,9 @@ app.add_typer(hub_app, name="hub")
 
 groups_app = typer.Typer(help="Build and browse OutputGroups derived from hub metadata.")
 app.add_typer(groups_app, name="groups")
+
+analysis_app = typer.Typer(help="Run and inspect analysis modules.")
+app.add_typer(analysis_app, name="analysis")
 
 
 @app.callback()
@@ -90,7 +117,12 @@ def _render_payload_for_display(obj: Any, *, full: bool) -> Any:
     return obj
 
 
-def _build_analysis_hub(*, hub_dir: Path | None, adapter_store_dir: Path | None) -> FileSystemAnalysisHub:
+def _build_analysis_hub(
+    *,
+    hub_dir: Path | None,
+    adapter_store_dir: Path | None,
+    analysis_results_dir: Path | None = None,
+) -> FileSystemAnalysisHub:
     """
     Construct the Analysis Hub.
 
@@ -104,10 +136,27 @@ def _build_analysis_hub(*, hub_dir: Path | None, adapter_store_dir: Path | None)
 
     base_dir = hub_dir if hub_dir is not None else adapter_store_dir
     try:
-        return FileSystemAnalysisHub(base_dir=base_dir)
+        return FileSystemAnalysisHub(base_dir=base_dir, analysis_results_dir=analysis_results_dir)
     except MetadataLoadError as err:
         print(f"[red]{err}[/red]")
         raise typer.Exit(code=1) from err
+
+
+def _ensure_analysis_implementations_loaded() -> None:
+    """Populate the analysis module registry with built-in implementations."""
+    name = "neurolab.analysis_modules.implementations"
+    if name in sys.modules:
+        importlib.reload(sys.modules[name])
+    else:
+        importlib.import_module(name)
+
+
+def _analysis_request_from_module(module: Any, request_data: Any) -> Any:
+    """Delegate request shaping to the module when ``request_from_dict`` is defined."""
+    ctor = getattr(module, "request_from_dict", None)
+    if callable(ctor):
+        return ctor(request_data)
+    return request_data
 
 
 def _hub_filter_records(
@@ -118,6 +167,7 @@ def _hub_filter_records(
     adapter_name: str | None,
     dataset_type: str | None,
     data_hash: str | None = None,
+    include_derived: bool = False,
 ):
     return hub.find_records(
         manifest_id=manifest_id,
@@ -125,6 +175,7 @@ def _hub_filter_records(
         adapter_name=adapter_name,
         dataset_type=dataset_type,
         data_hash=data_hash,
+        include_derived=include_derived,
     )
 
 
@@ -327,6 +378,13 @@ def hub_list(
     data_hash: Annotated[str | None, typer.Option("--data-hash", help="Filter by standardized payload data_hash.")] = None,
     limit: Annotated[int | None, typer.Option("--limit", help="Show only the first N records after filtering.")] = None,
     long: Annotated[bool, typer.Option("--long", help="Include additional metadata columns.")] = False,
+    include_derived: Annotated[
+        bool,
+        typer.Option(
+            "--include-derived",
+            help="Include persisted analysis results (derived records), not only adapter outputs.",
+        ),
+    ] = False,
     hub_dir: Annotated[
         Path | None,
         typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
@@ -339,8 +397,20 @@ def hub_list(
             path_type=Path,
         ),
     ] = None,
+    analysis_results_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis-results-dir",
+            help="Base directory for analysis results (default: ~/.neurolab/data/analysis_results).",
+            path_type=Path,
+        ),
+    ] = None,
 ):
-    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    hub = _build_analysis_hub(
+        hub_dir=hub_dir,
+        adapter_store_dir=adapter_store_dir,
+        analysis_results_dir=analysis_results_dir,
+    )
     records = _hub_filter_records(
         hub,
         manifest_id=manifest_id,
@@ -348,11 +418,14 @@ def hub_list(
         adapter_name=adapter_name,
         dataset_type=dataset_type,
         data_hash=data_hash,
+        include_derived=include_derived,
     )
     if limit is not None:
         records = records[: max(0, int(limit))]
 
     table = Table(title="Analysis Hub Records")
+    if include_derived:
+        table.add_column("Kind", style="bold")
     table.add_column("Provenance ID", style="cyan", no_wrap=True)
     table.add_column("Data Hash", style="magenta", no_wrap=True)
     table.add_column("Manifest ID", style="green", no_wrap=True)
@@ -368,18 +441,42 @@ def hub_list(
         table.add_column("Payload Path", style="dim")
 
     for r in records:
-        row = [
-            _short_id(r.provenance_id, 12),
-            _short_id(r.data_hash, 12),
-            _short_id(r.manifest_id, 12),
-            r.artifact_id,
-            r.adapter_name,
-            r.dataset_type,
-            "" if r.row_count is None else str(r.row_count),
-            "" if r.shape_summary is None else json.dumps(r.shape_summary, sort_keys=True, ensure_ascii=False),
-        ]
-        if long:
-            row.extend([r.adapter_version, str(r.pipeline_ordinal), r.payload_format, r.payload_path])
+        lg = r.lineage
+        if r.record_kind == "original":
+            row = [
+                _short_id(r.provenance_id, 12),
+                _short_id(r.data_hash, 12),
+                _short_id(str(lg.get(LINEAGE_MANIFEST_ID, "")), 12),
+                str(lg.get(LINEAGE_ARTIFACT_ID, "")),
+                str(lg.get(LINEAGE_ADAPTER_NAME, "")),
+                r.record_type,
+                "" if lg.get(LINEAGE_ROW_COUNT) is None else str(lg[LINEAGE_ROW_COUNT]),
+                "" if lg.get(LINEAGE_SHAPE_SUMMARY) is None else json.dumps(lg[LINEAGE_SHAPE_SUMMARY], sort_keys=True, ensure_ascii=False),
+            ]
+            if long:
+                row.extend(
+                    [
+                        str(lg.get(LINEAGE_ADAPTER_VERSION, "")),
+                        str(lg.get(LINEAGE_PIPELINE_ORDINAL, "")),
+                        str(lg.get(LINEAGE_PAYLOAD_FORMAT, "")),
+                        str(lg.get(LINEAGE_PAYLOAD_PATH, "")),
+                    ]
+                )
+        else:
+            row = [
+                _short_id(r.provenance_id, 12),
+                _short_id(r.data_hash, 12),
+                "—",
+                "—",
+                str(lg.get(LINEAGE_MODULE_NAME, "")),
+                r.record_type,
+                "",
+                "",
+            ]
+            if long:
+                row.extend([str(lg.get(LINEAGE_MODULE_VERSION, "")), "—", "—", "—"])
+        if include_derived:
+            row.insert(0, r.record_kind)
         table.add_row(*row)
     print(table)
 
@@ -395,8 +492,20 @@ def hub_show(
         Path | None,
         typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
     ] = None,
+    analysis_results_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis-results-dir",
+            help="Base directory for analysis results (default: ~/.neurolab/data/analysis_results).",
+            path_type=Path,
+        ),
+    ] = None,
 ):
-    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    hub = _build_analysis_hub(
+        hub_dir=hub_dir,
+        adapter_store_dir=adapter_store_dir,
+        analysis_results_dir=analysis_results_dir,
+    )
     try:
         r = hub.get_record(provenance_id)
     except MetadataRecordNotFoundError:
@@ -407,22 +516,37 @@ def hub_show(
     table.add_column("Field", style="bold cyan", no_wrap=True)
     table.add_column("Value", style="bold green")
 
+    lg = r.lineage
+    table.add_row("record_kind", r.record_kind)
+    table.add_row("record_type", r.record_type)
     table.add_row("provenance_id", r.provenance_id)
     table.add_row("data_hash", r.data_hash)
-    table.add_row("manifest_id", r.manifest_id)
-    table.add_row("artifact_id", r.artifact_id)
-    table.add_row("raw_content_hash", "" if r.raw_content_hash is None else r.raw_content_hash)
-    table.add_row("adapter_name", r.adapter_name)
-    table.add_row("adapter_version", r.adapter_version)
-    table.add_row("adapter_config_hash", "" if r.adapter_config_hash is None else r.adapter_config_hash)
-    table.add_row("dataset_type", r.dataset_type)
-    table.add_row("pipeline_ordinal", str(r.pipeline_ordinal))
-    table.add_row("payload_format", r.payload_format)
-    table.add_row("payload_path", r.payload_path)
-    table.add_row("row_count", "" if r.row_count is None else str(r.row_count))
-    table.add_row("shape_summary", "" if r.shape_summary is None else json.dumps(r.shape_summary, sort_keys=True, ensure_ascii=False))
-    table.add_row("schema_fingerprint", r.schema_fingerprint)
     table.add_row("created_at", r.created_at)
+    if r.record_kind == "original":
+        table.add_row("manifest_id", str(lg.get(LINEAGE_MANIFEST_ID, "")))
+        table.add_row("artifact_id", str(lg.get(LINEAGE_ARTIFACT_ID, "")))
+        table.add_row("raw_content_hash", "" if lg.get(LINEAGE_RAW_CONTENT_HASH) is None else str(lg[LINEAGE_RAW_CONTENT_HASH]))
+        table.add_row("adapter_name", str(lg.get(LINEAGE_ADAPTER_NAME, "")))
+        table.add_row("adapter_version", str(lg.get(LINEAGE_ADAPTER_VERSION, "")))
+        table.add_row(
+            "adapter_config_hash",
+            "" if lg.get(LINEAGE_ADAPTER_CONFIG_HASH) is None else str(lg[LINEAGE_ADAPTER_CONFIG_HASH]),
+        )
+        table.add_row("pipeline_ordinal", str(lg.get(LINEAGE_PIPELINE_ORDINAL, "")))
+        table.add_row("payload_format", str(lg.get(LINEAGE_PAYLOAD_FORMAT, "")))
+        table.add_row("payload_path", str(lg.get(LINEAGE_PAYLOAD_PATH, "")))
+        table.add_row("row_count", "" if lg.get(LINEAGE_ROW_COUNT) is None else str(lg[LINEAGE_ROW_COUNT]))
+        table.add_row(
+            "shape_summary",
+            "" if lg.get(LINEAGE_SHAPE_SUMMARY) is None else json.dumps(lg[LINEAGE_SHAPE_SUMMARY], sort_keys=True, ensure_ascii=False),
+        )
+        table.add_row("schema_fingerprint", str(lg.get(LINEAGE_SCHEMA_FINGERPRINT, "")))
+    else:
+        table.add_row("module_name", str(lg.get(LINEAGE_MODULE_NAME, "")))
+        table.add_row("module_version", str(lg.get(LINEAGE_MODULE_VERSION, "")))
+        table.add_row("parameters_hash", str(lg.get(LINEAGE_PARAMETERS_HASH, "")))
+        table.add_row("input_provenance_ids", json.dumps(lg.get(LINEAGE_INPUT_PROVENANCE_IDS, []), ensure_ascii=False))
+        table.add_row("input_data_hashes", json.dumps(lg.get(LINEAGE_INPUT_DATA_HASHES, []), ensure_ascii=False))
     print(table)
 
     print("[bold]schema[/bold]")
@@ -436,6 +560,13 @@ def hub_count(
     adapter_name: Annotated[str | None, typer.Option("--adapter-name", help="Filter by adapter_name.")] = None,
     dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
     data_hash: Annotated[str | None, typer.Option("--data-hash", help="Filter by data_hash.")] = None,
+    include_derived: Annotated[
+        bool,
+        typer.Option(
+            "--include-derived",
+            help="Include persisted analysis results (derived records), not only adapter outputs.",
+        ),
+    ] = False,
     hub_dir: Annotated[
         Path | None,
         typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
@@ -444,8 +575,20 @@ def hub_count(
         Path | None,
         typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
     ] = None,
+    analysis_results_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis-results-dir",
+            help="Base directory for analysis results (default: ~/.neurolab/data/analysis_results).",
+            path_type=Path,
+        ),
+    ] = None,
 ):
-    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    hub = _build_analysis_hub(
+        hub_dir=hub_dir,
+        adapter_store_dir=adapter_store_dir,
+        analysis_results_dir=analysis_results_dir,
+    )
     records = _hub_filter_records(
         hub,
         manifest_id=manifest_id,
@@ -453,29 +596,44 @@ def hub_count(
         adapter_name=adapter_name,
         dataset_type=dataset_type,
         data_hash=data_hash,
+        include_derived=include_derived,
     )
 
     adapter_counts: dict[str, int] = {}
     dataset_counts: dict[str, int] = {}
+    module_counts: dict[str, int] = {}
+    result_type_counts: dict[str, int] = {}
     manifests: set[str] = set()
     artifacts: set[str] = set()
     with_row_count = 0
     with_shape_summary = 0
+    derived_n = 0
 
     for r in records:
-        adapter_counts[r.adapter_name] = adapter_counts.get(r.adapter_name, 0) + 1
-        dataset_counts[r.dataset_type] = dataset_counts.get(r.dataset_type, 0) + 1
-        manifests.add(r.manifest_id)
-        artifacts.add(r.artifact_id)
-        if r.row_count is not None:
-            with_row_count += 1
-        if r.shape_summary is not None:
-            with_shape_summary += 1
+        lg = r.lineage
+        if r.record_kind == "original":
+            an = str(lg.get(LINEAGE_ADAPTER_NAME, ""))
+            adapter_counts[an] = adapter_counts.get(an, 0) + 1
+            dataset_counts[r.record_type] = dataset_counts.get(r.record_type, 0) + 1
+            manifests.add(str(lg.get(LINEAGE_MANIFEST_ID, "")))
+            artifacts.add(str(lg.get(LINEAGE_ARTIFACT_ID, "")))
+            if lg.get(LINEAGE_ROW_COUNT) is not None:
+                with_row_count += 1
+            if lg.get(LINEAGE_SHAPE_SUMMARY) is not None:
+                with_shape_summary += 1
+        else:
+            derived_n += 1
+            mn = str(lg.get(LINEAGE_MODULE_NAME, ""))
+            module_counts[mn] = module_counts.get(mn, 0) + 1
+            result_type_counts[r.record_type] = result_type_counts.get(r.record_type, 0) + 1
 
     summary = Table(title="Analysis Hub Count Summary")
     summary.add_column("Metric", style="bold cyan")
     summary.add_column("Value", style="bold green", justify="right")
     summary.add_row("Total records", str(len(records)))
+    summary.add_row("Original (adapter) records", str(len(records) - derived_n))
+    if include_derived:
+        summary.add_row("Derived (analysis) records", str(derived_n))
     summary.add_row("Distinct manifests", str(len(manifests)))
     summary.add_row("Distinct artifacts", str(len(artifacts)))
     summary.add_row("With row_count", str(with_row_count))
@@ -491,11 +649,27 @@ def hub_count(
         print(t)
 
     if dataset_counts:
-        t = Table(title="Counts by dataset_type")
+        t = Table(title="Counts by dataset_type (originals)")
         t.add_column("dataset_type", style="bold")
         t.add_column("count", justify="right")
         for k in sorted(dataset_counts):
             t.add_row(k, str(dataset_counts[k]))
+        print(t)
+
+    if include_derived and module_counts:
+        t = Table(title="Counts by module_name (derived)")
+        t.add_column("module_name", style="bold")
+        t.add_column("count", justify="right")
+        for k in sorted(module_counts):
+            t.add_row(k, str(module_counts[k]))
+        print(t)
+
+    if include_derived and result_type_counts:
+        t = Table(title="Counts by result_type (derived)")
+        t.add_column("result_type", style="bold")
+        t.add_column("count", justify="right")
+        for k in sorted(result_type_counts):
+            t.add_row(k, str(result_type_counts[k]))
         print(t)
 
 
@@ -512,8 +686,20 @@ def hub_load(
         Path | None,
         typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
     ] = None,
+    analysis_results_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis-results-dir",
+            help="Base directory for analysis results (default: ~/.neurolab/data/analysis_results).",
+            path_type=Path,
+        ),
+    ] = None,
 ):
-    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    hub = _build_analysis_hub(
+        hub_dir=hub_dir,
+        adapter_store_dir=adapter_store_dir,
+        analysis_results_dir=analysis_results_dir,
+    )
     try:
         h = hub.open_handle(provenance_id)
     except MetadataRecordNotFoundError:
@@ -527,6 +713,7 @@ def hub_load(
         raise typer.Exit(code=1) from err
 
     r = h.metadata
+    lg = r.lineage
     payload_type = type(payload).__name__
     keys = list(payload.keys()) if isinstance(payload, dict) else None
     n_items = len(payload) if isinstance(payload, list) else None
@@ -534,6 +721,7 @@ def hub_load(
     table = Table(title=f"Loaded payload for {_short_id(r.provenance_id, 12)}")
     table.add_column("Field", style="bold cyan", no_wrap=True)
     table.add_column("Value", style="bold green")
+    table.add_row("record_kind", r.record_kind)
     table.add_row("provenance_id", r.provenance_id)
     table.add_row("data_hash", r.data_hash)
     table.add_row("python_type", payload_type)
@@ -541,8 +729,13 @@ def hub_load(
         table.add_row("top_level_keys", ", ".join([str(k) for k in keys[:20]]) + ("" if len(keys) <= 20 else ", ..."))
     if n_items is not None:
         table.add_row("list_length", str(n_items))
-    table.add_row("row_count", "" if r.row_count is None else str(r.row_count))
-    table.add_row("shape_summary", "" if r.shape_summary is None else json.dumps(r.shape_summary, sort_keys=True, ensure_ascii=False))
+    row_count = lg.get(LINEAGE_ROW_COUNT) if r.record_kind == "original" else None
+    shape_summary = lg.get(LINEAGE_SHAPE_SUMMARY) if r.record_kind == "original" else None
+    table.add_row("row_count", "" if row_count is None else str(row_count))
+    table.add_row(
+        "shape_summary",
+        "" if shape_summary is None else json.dumps(shape_summary, sort_keys=True, ensure_ascii=False),
+    )
     print(table)
 
     if summary_only and not json_out:
@@ -561,6 +754,13 @@ def hub_schemas(
     dataset_type: Annotated[str | None, typer.Option("--dataset-type", help="Filter by dataset_type.")] = None,
     data_hash: Annotated[str | None, typer.Option("--data-hash", help="Filter by data_hash.")] = None,
     long: Annotated[bool, typer.Option("--long", help="Include an example id and schema preview.")] = False,
+    include_derived: Annotated[
+        bool,
+        typer.Option(
+            "--include-derived",
+            help="Include persisted analysis results (derived records), not only adapter outputs.",
+        ),
+    ] = False,
     hub_dir: Annotated[
         Path | None,
         typer.Option("--hub-dir", help="Base directory for hub records (default: ~/.neurolab/data/adapter_outputs).", path_type=Path),
@@ -569,8 +769,20 @@ def hub_schemas(
         Path | None,
         typer.Option("--adapter-store-dir", help="Alias for --hub-dir.", path_type=Path),
     ] = None,
+    analysis_results_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis-results-dir",
+            help="Base directory for analysis results (default: ~/.neurolab/data/analysis_results).",
+            path_type=Path,
+        ),
+    ] = None,
 ):
-    hub = _build_analysis_hub(hub_dir=hub_dir, adapter_store_dir=adapter_store_dir)
+    hub = _build_analysis_hub(
+        hub_dir=hub_dir,
+        adapter_store_dir=adapter_store_dir,
+        analysis_results_dir=analysis_results_dir,
+    )
     records = _hub_filter_records(
         hub,
         manifest_id=manifest_id,
@@ -578,26 +790,36 @@ def hub_schemas(
         adapter_name=adapter_name,
         dataset_type=dataset_type,
         data_hash=data_hash,
+        include_derived=include_derived,
     )
 
-    groups: dict[tuple[str, str, str], list] = {}
+    groups: dict[tuple[str, str, str, str], list] = {}
     for r in records:
         fp = schema_fingerprint(r.schema)
-        key = (r.adapter_name, r.dataset_type, fp)
+        if r.record_kind == "original":
+            producer = str(r.lineage.get(LINEAGE_ADAPTER_NAME, ""))
+            type_label = r.record_type
+            kind_tag = "original"
+        else:
+            producer = str(r.lineage.get(LINEAGE_MODULE_NAME, ""))
+            type_label = r.record_type
+            kind_tag = "derived"
+        key = (kind_tag, producer, type_label, fp)
         groups.setdefault(key, []).append(r)
 
     table = Table(title="Schemas in Analysis Hub")
-    table.add_column("adapter_name", style="bold")
-    table.add_column("dataset_type")
+    table.add_column("kind", style="dim")
+    table.add_column("producer", style="bold")
+    table.add_column("record_type")
     table.add_column("schema_fingerprint", style="cyan", no_wrap=True)
     table.add_column("record_count", justify="right")
     if long:
         table.add_column("example_id", style="dim", no_wrap=True)
         table.add_column("schema_preview", style="dim")
 
-    for an, dt, fp in sorted(groups.keys()):
-        rs = groups[(an, dt, fp)]
-        row = [an, dt, fp, str(len(rs))]
+    for kind_tag, producer, type_label, fp in sorted(groups.keys()):
+        rs = groups[(kind_tag, producer, type_label, fp)]
+        row = [kind_tag, producer, type_label, fp, str(len(rs))]
         if long:
             example = rs[0]
             preview = canonical_json(example.schema)
@@ -826,6 +1048,125 @@ def groups_delete(
         print("[green]Deleted OutputGroup catalog.[/green]")
     else:
         print("[yellow]No OutputGroup catalog found (nothing to delete).[/yellow]")
+
+
+@analysis_app.command("list")
+def analysis_list():
+    """List registered analysis modules."""
+    _ensure_analysis_implementations_loaded()
+    table = Table(title="Analysis Modules")
+    table.add_column("Name", style="bold cyan", no_wrap=True)
+    table.add_column("Version", style="magenta", no_wrap=True)
+    table.add_column("Summary", style="green")
+    for module in list_analysis_modules():
+        desc = module.describe()
+        table.add_row(desc.module_name, desc.module_version, desc.summary)
+    print(table)
+
+
+@analysis_app.command("describe")
+def analysis_describe(
+    module_name: Annotated[str, typer.Argument(help="Registered analysis module name (e.g. payload_top_level_count).")],
+):
+    """Show metadata for one analysis module."""
+    _ensure_analysis_implementations_loaded()
+    try:
+        module = get_analysis_module(module_name)
+    except KeyError as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=2) from err
+
+    desc = module.describe()
+    table = Table(title=f"Analysis Module {desc.module_name}")
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="green")
+    table.add_row("module_name", desc.module_name)
+    table.add_row("module_version", desc.module_version)
+    table.add_row("summary", desc.summary)
+    table.add_row("supported_dataset_types", ", ".join(desc.supported_dataset_types) or "(none)")
+    table.add_row("supported_adapter_names", ", ".join(desc.supported_adapter_names) or "(none)")
+    notes = "\n".join(desc.notes) if desc.notes else "(none)"
+    table.add_row("notes", notes)
+    print(table)
+
+
+@analysis_app.command("run")
+def analysis_run(
+    module_name: Annotated[str, typer.Argument(help="Registered analysis module name.")],
+    request_path: Annotated[
+        Path,
+        typer.Option(
+            "--request",
+            help="Path to JSON request object.",
+            path_type=Path,
+            exists=True,
+            file_okay=True,
+            dir_okay=False,
+        ),
+    ],
+    adapter_outputs_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--adapter-outputs-dir",
+            help="Base directory for adapter outputs (default: ~/.neurolab/data/adapter_outputs).",
+            path_type=Path,
+        ),
+    ] = None,
+    hub_dir: Annotated[
+        Path | None,
+        typer.Option("--hub-dir", help="Alias for --adapter-outputs-dir.", path_type=Path),
+    ] = None,
+    analysis_results_dir: Annotated[
+        Path | None,
+        typer.Option(
+            "--analysis-results-dir",
+            help="Base directory for analysis results (default: ~/.neurolab/data/analysis_results).",
+            path_type=Path,
+        ),
+    ] = None,
+):
+    """Run an analysis module and persist the result."""
+    _ensure_analysis_implementations_loaded()
+    try:
+        module = get_analysis_module(module_name)
+    except KeyError as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=2) from err
+
+    try:
+        request_data = json.loads(request_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as err:
+        print(f"[red]Invalid JSON in request file: {err}[/red]")
+        raise typer.Exit(code=2) from err
+
+    if not isinstance(request_data, dict):
+        print("[red]Request JSON must be an object at the top level.[/red]")
+        raise typer.Exit(code=2)
+
+    try:
+        request = _analysis_request_from_module(module, request_data)
+    except (TypeError, ValueError) as err:
+        print(f"[red]{err}[/red]")
+        raise typer.Exit(code=2) from err
+
+    hub = _build_analysis_hub(
+        hub_dir=hub_dir,
+        adapter_store_dir=adapter_outputs_dir,
+        analysis_results_dir=analysis_results_dir,
+    )
+    store = FileAnalysisResultStore(base_dir=hub.analysis_results_dir)
+
+    persisted = run_analysis_module(module, hub, store, request)
+
+    table = Table(title="Analysis Result")
+    table.add_column("Field", style="bold cyan", no_wrap=True)
+    table.add_column("Value", style="green")
+    table.add_row("provenance_id", persisted.provenance_id)
+    table.add_row("data_hash", persisted.data_hash)
+    table.add_row("result_type", persisted.result_type)
+    table.add_row("module_name", persisted.module_name)
+    table.add_row("module_version", persisted.module_version)
+    print(table)
 
 
 @app.command()

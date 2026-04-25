@@ -17,14 +17,17 @@ class FakeRecord:
     provenance_id: str
     adapter_name: str
     schema: dict
+    record_kind: str = "original"
 
 
 class FakeHub:
     def __init__(self, records: list[FakeRecord]) -> None:
         self._records = records
 
-    def list_records(self) -> list[FakeRecord]:
-        return list(self._records)
+    def list_records(self, *, include_derived: bool = False) -> list[FakeRecord]:
+        if include_derived:
+            return list(self._records)
+        return [r for r in self._records if r.record_kind == "original"]
 
 
 def rec(pid: str, relative_path: str, *, fmt: str | None = "neuralynx_ncs") -> FakeRecord:

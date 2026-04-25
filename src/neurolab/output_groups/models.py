@@ -15,7 +15,8 @@ class OutputGroup:
     Analysis Hub. It does not contain payloads and must not load payloads.
 
     `member_provenance_ids` contains persisted output addressing ids, typically
-    `OutputMetadataRecord.provenance_id` values observed from `hub.list_records()`.
+    :attr:`~neurolab.analysis_hub.models.HubRecord.provenance_id` values for adapter outputs
+    (``record_kind == 'original'``) observed from ``hub.list_records()``.
     Parent-child relationships are represented by ids (no nested objects).
     """
 

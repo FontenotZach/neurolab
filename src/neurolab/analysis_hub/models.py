@@ -4,10 +4,30 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from neurolab.analysis_hub.errors import PayloadNotFoundError
 from neurolab.storage.adapter_results import PayloadDecodeError, decode_payload_from_record
+
+RecordKind = Literal["original", "derived"]
+
+
+@dataclass(frozen=True, slots=True)
+class HubRecord:
+    """
+    Unified metadata-only view for catalog records (adapter outputs and analysis results).
+
+    Kind-specific fields live in ``lineage``; see :mod:`neurolab.analysis_hub.record_mapping`
+    for documented lineage keys per ``record_kind``.
+    """
+
+    provenance_id: str
+    data_hash: str
+    record_kind: RecordKind
+    record_type: str
+    schema: dict[str, Any]
+    created_at: str
+    lineage: dict[str, Any]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,7 +62,7 @@ class OutputMetadataRecord:
 @dataclass(frozen=True, slots=True)
 class PayloadDescriptor:
     provenance_id: str
-    manifest_id: str
+    manifest_id: str | None
     record_dir: Path
     meta_json_path: Path
     primary_payload_path: Path
@@ -50,7 +70,7 @@ class PayloadDescriptor:
 
 @dataclass(slots=True)
 class AnalysisHandle:
-    metadata: OutputMetadataRecord
+    metadata: HubRecord
     payload: PayloadDescriptor
 
     def load(self) -> Any:
